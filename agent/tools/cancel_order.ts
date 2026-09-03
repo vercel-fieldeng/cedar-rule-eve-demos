@@ -11,7 +11,7 @@ export default guarded("cancel_order", {
     if (order.status !== "processing") {
       return { ok: false, error: `Order ${order.id} is ${order.status}; only processing orders can be cancelled` };
     }
-    order.status = "cancelled";
-    return { ok: true, orderId: order.id, status: order.status, customerNotified: notifyCustomer };
+    // Simulated write: fixtures stay pristine so guided scenarios are repeatable.
+    return { ok: true, orderId: order.id, status: "cancelled", customerNotified: notifyCustomer, simulated: true };
   },
 });

@@ -11,8 +11,9 @@ export default guarded("update_shipping_address", {
     if (order.status !== "processing") {
       return { ok: false, error: `Order ${order.id} is ${order.status}; the address can no longer be changed` };
     }
+    // Simulated write: fixtures stay pristine so guided scenarios are repeatable.
     const previous = { ...order.shipping };
-    order.shipping = { country: country.toUpperCase(), line1, city, postalCode };
-    return { ok: true, orderId: order.id, previous, shipping: order.shipping };
+    const shipping = { country: country.toUpperCase(), line1, city, postalCode };
+    return { ok: true, orderId: order.id, previous, shipping, simulated: true };
   },
 });

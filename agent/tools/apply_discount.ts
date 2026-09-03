@@ -8,7 +8,7 @@ export default guarded("apply_discount", {
   execute({ orderId, percent, code }) {
     const order = demoStore.getOrder(orderId);
     if (!order) return { ok: false, error: `Unknown order ${orderId}` };
-    order.discountPercent = percent;
+    // Simulated write: fixtures stay pristine so guided scenarios are repeatable.
     const discounted = Math.round(order.total * (1 - percent / 100));
     return {
       ok: true,
@@ -17,6 +17,7 @@ export default guarded("apply_discount", {
       code: code ?? null,
       originalTotal: order.total,
       discountedTotal: discounted,
+      simulated: true,
     };
   },
 });

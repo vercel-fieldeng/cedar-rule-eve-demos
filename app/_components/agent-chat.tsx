@@ -2,7 +2,7 @@
 
 import type { UserContent } from "ai";
 import { useEveAgent } from "eve/react";
-import { AlertCircleIcon, BrainIcon, PlusIcon, SquareIcon } from "lucide-react";
+import { AlertCircleIcon, BrainIcon, Loader2Icon, PlusIcon, SquareIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   Conversation,
@@ -27,14 +27,7 @@ import { AgentMessage } from "./agent-message";
 
 const AGENT_NAME = "orderdesk";
 
-export function AgentChat({
-  sessionId,
-  sessionless = false,
-  embedded = false,
-  onSessionId,
-  resetKey,
-  autoSend,
-}: {
+interface AgentChatProps {
   readonly sessionId?: string;
   readonly sessionless?: boolean;
   /** Embedded in the console: do not rewrite the URL when a session starts. */
@@ -48,12 +41,55 @@ export function AgentChat({
    * the persona token is available. Used by guided scenarios in the console.
    */
   readonly autoSend?: { key: number; text: string } | null;
-}) {
+}
+
+/**
+ * `useEveAgent` builds its client store once on mount and captures `auth` at
+ * that moment, so the chat must not mount until the persona token is ready.
+ * Keying on the token also guarantees a fresh store (and session) per persona.
+ */
+export function AgentChat(props: AgentChatProps) {
+  const identity = usePersona();
+
+  if (!identity.token) {
+    return (
+      <div
+        className={cn(
+          "flex items-center justify-center bg-background text-muted-foreground text-sm",
+          props.embedded ? "h-full" : "h-dvh",
+        )}
+        role="status"
+        aria-live="polite"
+      >
+        {identity.error ? (
+          <span className="text-destructive">Could not mint a persona token.</span>
+        ) : (
+          <span className="flex items-center gap-2">
+            <Loader2Icon className="size-4 animate-spin" aria-hidden />
+            Signing in as {identity.persona?.label ?? "…"}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  return <AgentChatInner key={identity.token} {...props} bearer={identity.token} />;
+}
+
+function AgentChatInner({
+  sessionId,
+  sessionless = false,
+  embedded = false,
+  onSessionId,
+  resetKey,
+  autoSend,
+  bearer,
+}: AgentChatProps & { readonly bearer: string }) {
   const [cancellationError, setCancellationError] = useState<string>();
   const [hasInputText, setHasInputText] = useState(false);
   const identity = usePersona();
   const agent = useEveAgent({
-    auth: { bearer: identity.bearer },
+    auth: { bearer },
     initialSession:
       sessionId === undefined
         ? undefined
@@ -87,15 +123,22 @@ export function AgentChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
 
-  // Guided scenarios: send the prompt as soon as the (possibly new) persona token is ready.
+  // Guided scenarios: send the prompt once the chat is mounted with a valid token.
+  // Deferred with a cleared timeout so React StrictMode's simulated unmount (which
+  // makes useEveAgent abort the active turn) cannot cancel the request in dev.
   const sentAutoKey = useRef<number | null>(null);
   useEffect(() => {
     if (!autoSend || sentAutoKey.current === autoSend.key) return;
-    if (!identity.bearer || identity.isLoading) return;
-    sentAutoKey.current = autoSend.key;
-    void agent.send(autoSend.text);
+    const { key, text } = autoSend;
+    const timer = setTimeout(() => {
+      sentAutoKey.current = key;
+      agent.send(text).catch((error: unknown) => {
+        console.error("[orderdesk] scenario send failed", error);
+      });
+    }, 0);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSend?.key, identity.bearer, identity.isLoading]);
+  }, [autoSend?.key]);
 
   const isBusy = agent.status === "submitted" || agent.status === "streaming";
   const isResuming = agent.status === "resuming";

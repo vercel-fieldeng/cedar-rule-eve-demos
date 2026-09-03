@@ -33,12 +33,14 @@ export function ConsoleWorkbench() {
 
   const newSession = useCallback(() => {
     setResetCounter((c) => c + 1);
+    setSessionId(undefined);
     setAutoSend(null);
   }, []);
 
   function runScenario(s: Scenario) {
     if (identity.personaId !== s.personaId) identity.select(s.personaId);
     setResetCounter((c) => c + 1);
+    setSessionId(undefined);
     setAutoSend({ key: Date.now(), text: s.prompt });
     setScope("session");
     setTab("decisions");
