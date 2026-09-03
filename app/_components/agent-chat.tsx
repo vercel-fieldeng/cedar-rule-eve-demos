@@ -2,7 +2,14 @@
 
 import type { UserContent } from "ai";
 import { useEveAgent } from "eve/react";
-import { AlertCircleIcon, BrainIcon, Loader2Icon, PlusIcon, SquareIcon } from "lucide-react";
+import {
+  AlertCircleIcon,
+  BrainIcon,
+  Loader2Icon,
+  PlusIcon,
+  ShieldCheckIcon,
+  SquareIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   Conversation,
@@ -239,6 +246,20 @@ function AgentChatInner({
               embedded ? "pt-6 pb-32" : "pt-20 pb-36",
             )}
           >
+            {embedded && isEmpty && !isBusy && !errorMessage ? (
+              <div className="flex flex-col items-center gap-3 pt-[18vh] text-center">
+                <p className="font-medium text-2xl tracking-tight">{AGENT_NAME}</p>
+                {identity.persona ? (
+                  <p className="text-muted-foreground text-sm">
+                    Acting as <span className="text-foreground">{identity.persona.label}</span>
+                  </p>
+                ) : null}
+                <p className="max-w-xs text-pretty text-muted-foreground text-sm leading-relaxed">
+                  Every tool call is authorized by Cedar before it runs. Run a scenario or ask
+                  the agent to look up, refund, cancel, or discount an order.
+                </p>
+              </div>
+            ) : null}
             {agent.data.messages.map((message, index) =>
               showPendingThinking &&
               isPendingAssistantShell &&
@@ -283,6 +304,13 @@ function AgentChatInner({
                 Signed in as <span className="text-foreground">{identity.persona.label}</span>
               </p>
             ) : null}
+            <a
+              className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-muted-foreground text-xs transition-colors hover:bg-accent hover:text-foreground"
+              href="/console"
+            >
+              <ShieldCheckIcon className="size-3.5" aria-hidden />
+              Open the policy console
+            </a>
           </div>
         )}
         <div className="w-full">{composer}</div>
@@ -345,6 +373,13 @@ function ChatHeader({ canStartNewChat }: { readonly canStartNewChat: boolean }) 
     <header className="pointer-events-none fixed top-0 right-0 left-0 z-20 h-14">
       <div className="relative mx-auto flex h-full w-full max-w-3xl items-center justify-center bg-background px-24">
         <span className="truncate text-muted-foreground text-sm">{AGENT_NAME}</span>
+        <a
+          className="pointer-events-auto fixed top-3 left-6 inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-muted-foreground text-sm transition-colors hover:bg-accent hover:text-foreground"
+          href="/console"
+        >
+          <ShieldCheckIcon className="size-4" aria-hidden />
+          <span className="hidden sm:inline">Policy console</span>
+        </a>
         {canStartNewChat ? (
           <Button
             aria-label="Start a new chat"
