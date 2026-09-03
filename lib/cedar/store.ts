@@ -157,7 +157,7 @@ export async function recordDecision(rec: DecisionRecord): Promise<number> {
       enforced: rec.enforced,
       determiningPolicies: rec.determiningPolicies,
       errors: rec.errors,
-      durationMs: rec.durationMs,
+      durationMs: Math.max(0, Math.round(rec.durationMs)),
     })
     .returning({ id: cedarDecisions.id });
   return row.id;

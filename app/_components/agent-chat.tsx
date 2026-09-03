@@ -3,7 +3,7 @@
 import type { UserContent } from "ai";
 import { useEveAgent } from "eve/react";
 import { AlertCircleIcon, BrainIcon, PlusIcon, SquareIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -21,6 +21,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Button } from "@/components/ui/button";
+import { usePersona } from "@/lib/personas/use-persona";
 import { cn } from "@/lib/utils";
 import { AgentMessage } from "./agent-message";
 
@@ -29,13 +30,24 @@ const AGENT_NAME = "orderdesk";
 export function AgentChat({
   sessionId,
   sessionless = false,
+  embedded = false,
+  onSessionId,
+  resetKey,
 }: {
   readonly sessionId?: string;
   readonly sessionless?: boolean;
+  /** Embedded in the console: do not rewrite the URL when a session starts. */
+  readonly embedded?: boolean;
+  /** Reports the active eve session id (used by the console decision log). */
+  readonly onSessionId?: (sessionId: string | undefined) => void;
+  /** Changing this value starts a fresh session. */
+  readonly resetKey?: string | number;
 }) {
   const [cancellationError, setCancellationError] = useState<string>();
   const [hasInputText, setHasInputText] = useState(false);
+  const identity = usePersona();
   const agent = useEveAgent({
+    auth: { bearer: identity.bearer },
     initialSession:
       sessionId === undefined
         ? undefined
@@ -45,6 +57,8 @@ export function AgentChat({
           },
     resume: sessionId !== undefined,
     onSessionChange(session) {
+      onSessionId?.(session?.sessionId);
+      if (embedded) return;
       if (sessionId === undefined && session !== undefined) {
         // Next patches window.history to navigate, which would detach the active stream.
         History.prototype.replaceState.call(
@@ -56,6 +70,16 @@ export function AgentChat({
       }
     },
   });
+
+  // Start a fresh eve session when the console asks for one (persona switch, "New session").
+  const lastResetKey = useRef(resetKey);
+  useEffect(() => {
+    if (lastResetKey.current === resetKey) return;
+    lastResetKey.current = resetKey;
+    agent.reset();
+    onSessionId?.(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
 
   const isBusy = agent.status === "submitted" || agent.status === "streaming";
   const isResuming = agent.status === "resuming";
@@ -125,9 +149,16 @@ export function AgentChat({
     </PromptInput>
   );
 
+  const Root = embedded ? "section" : "main";
+
   return (
-    <main className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
-      {showConversationLayout ? (
+    <Root
+      className={cn(
+        "relative flex flex-col overflow-hidden bg-background text-foreground",
+        embedded ? "h-full min-h-0" : "h-dvh",
+      )}
+    >
+      {showConversationLayout && !embedded ? (
         <ChatHeader canStartNewChat={activeSessionId !== undefined} />
       ) : null}
 
@@ -142,8 +173,13 @@ export function AgentChat({
               : `eve:web-chat-scroll:${activeSessionId}`
           }
         >
-          <ConversationTopFade className="top-14" />
-          <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-4 pt-20 pb-36 sm:px-6">
+          <ConversationTopFade className={embedded ? "top-0" : "top-14"} />
+          <ConversationContent
+            className={cn(
+              "mx-auto w-full max-w-3xl gap-6 px-4 sm:px-6",
+              embedded ? "pt-6 pb-32" : "pt-20 pb-36",
+            )}
+          >
             {agent.data.messages.map((message, index) =>
               showPendingThinking &&
               isPendingAssistantShell &&
@@ -173,18 +209,26 @@ export function AgentChat({
         className={cn(
           "mx-auto w-full px-4 sm:px-6",
           showConversationLayout
-            ? "fixed bottom-0 left-1/2 z-20 max-w-3xl -translate-x-1/2 bg-gradient-to-t from-background via-background to-transparent pt-4 pb-6"
+            ? cn(
+                "bottom-0 left-1/2 z-20 max-w-3xl -translate-x-1/2 bg-gradient-to-t from-background via-background to-transparent pt-4 pb-6",
+                embedded ? "absolute" : "fixed",
+              )
             : "flex max-w-xl flex-1 flex-col items-center justify-center gap-8 pb-[10vh]",
         )}
       >
         {showConversationLayout ? null : (
           <div className="flex flex-col items-center gap-3 text-center">
             <h1 className="font-medium text-5xl tracking-tighter">{AGENT_NAME}</h1>
+            {identity.persona ? (
+              <p className="text-muted-foreground text-sm">
+                Signed in as <span className="text-foreground">{identity.persona.label}</span>
+              </p>
+            ) : null}
           </div>
         )}
         <div className="w-full">{composer}</div>
       </div>
-    </main>
+    </Root>
   );
 }
 
