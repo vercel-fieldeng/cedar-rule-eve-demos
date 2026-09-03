@@ -3,11 +3,17 @@ import type { EngineMode } from "../db/schema";
 import { AGENT_ID, TOOL_NAMES, type ToolName } from "./catalog";
 import { AGENT_RESOURCE, ENTITY_TYPES, getCedarSchema } from "./schema";
 import {
-  getEnabledPolicyText,
+  getEnabledPolicySet,
   getEngineMode,
   listExecutedActionsForSession,
   recordDecision,
 } from "./store";
+
+/**
+ * A Cedar policy set keyed by policy id. Cedar reports these keys in
+ * `diagnostics.reason`, which is how decisions cite human-readable ids.
+ */
+export type PolicySet = Record<string, string>;
 
 /* ------------------------------------------------------------------ */
 /* Principal                                                            */
@@ -126,7 +132,7 @@ export interface AuthorizeRequest {
   /** Override session context (dry-run). */
   session?: SessionCedarContext;
   /** Override policies (dry-run against unsaved edits). */
-  policies?: string;
+  policies?: PolicySet;
 }
 
 export interface AuthorizeResult {
@@ -147,16 +153,18 @@ export interface AuthorizeResult {
   entities: unknown[];
 }
 
-function buildEntities(p: CedarPrincipal) {
+function buildEntities(p: CedarPrincipal): cedar.Entities {
   const type = p.kind === "user" ? ENTITY_TYPES.user : ENTITY_TYPES.service;
   return [
-    { uid: { type, id: p.id }, attrs: {}, parents: [], tags: p.tags },
+    { uid: { type, id: p.id }, attrs: {}, parents: [], tags: { ...p.tags } },
     { uid: { type: AGENT_RESOURCE.type, id: AGENT_RESOURCE.id }, attrs: {}, parents: [] },
   ];
 }
 
 /** Pure evaluation: no DB reads, no logging. Used by `authorize` and dry-run. */
-export async function evaluate(req: AuthorizeRequest & { policies: string; mode: EngineMode }): Promise<AuthorizeResult> {
+export async function evaluate(
+  req: AuthorizeRequest & { policies: PolicySet; mode: EngineMode },
+): Promise<AuthorizeResult> {
   const started = performance.now();
   const now = req.now ?? new Date().toISOString();
   const session = req.session ?? (await buildSessionContext(req.sessionId, req.turn));
@@ -167,9 +175,9 @@ export async function evaluate(req: AuthorizeRequest & { policies: string; mode:
     action: { type: ENTITY_TYPES.action, id: req.action },
     resource: { type: AGENT_RESOURCE.type, id: AGENT_RESOURCE.id },
     context: {
-      input: req.input,
+      input: req.input as cedar.CedarValueJson,
       system: { now: toCedarDatetime(now) },
-      session: encodeSessionContext(session),
+      session: encodeSessionContext(session) as cedar.CedarValueJson,
     },
   };
   const entities = buildEntities(req.principal);
@@ -208,7 +216,7 @@ export async function evaluate(req: AuthorizeRequest & { policies: string; mode:
 
 /** Live authorization used by the tool guard: loads policies + mode, logs the decision. */
 export async function authorize(req: AuthorizeRequest): Promise<AuthorizeResult & { decisionId: number }> {
-  const [{ text: policies }, mode] = await Promise.all([getEnabledPolicyText(), getEngineMode()]);
+  const [policies, mode] = await Promise.all([getEnabledPolicySet(), getEngineMode()]);
   const result = await evaluate({ ...req, policies, mode });
   const decisionId = await recordDecision({
     sessionId: req.sessionId,
@@ -253,24 +261,37 @@ export interface ValidationReport {
   policyCount: number;
 }
 
-/** Strict schema validation against the generated schema (AgentCore validates on create). */
-export function validatePolicies(policyText: string): ValidationReport {
+/**
+ * Strict schema validation against the generated schema (AgentCore validates on create).
+ * Accepts a single policy's text or an id-keyed policy set.
+ */
+export function validatePolicies(policies: string | PolicySet): ValidationReport {
   const issues: ValidationIssue[] = [];
-  const parsed = cedar.policySetTextToParts(policyText);
   let policyIds: string[] = [];
   let policyCount = 0;
 
+  const asText = typeof policies === "string" ? policies : Object.values(policies).join("\n\n");
+  const parsed = cedar.policySetTextToParts(asText);
   if (parsed.type === "failure") {
     for (const e of parsed.errors) issues.push({ severity: "error", message: e.message });
     return { ok: false, issues, policyIds, policyCount };
   }
   policyCount = parsed.policies.length;
-  policyIds = parsed.policies.map((p) => idAnnotationOf(p)).filter((x): x is string => Boolean(x));
+  policyIds =
+    typeof policies === "string"
+      ? parsed.policies.map((p) => idAnnotationOf(p)).filter((x): x is string => Boolean(x))
+      : Object.keys(policies);
+
+  // Single text with several policies: key each by its @id so diagnostics are readable.
+  const staticPolicies: PolicySet =
+    typeof policies === "string"
+      ? Object.fromEntries(parsed.policies.map((p, i) => [idAnnotationOf(p) ?? `policy${i}`, p]))
+      : policies;
 
   const v = cedar.validate({
     validationSettings: { mode: "strict" },
     schema: getCedarSchema(),
-    policies: { staticPolicies: policyText },
+    policies: { staticPolicies },
   });
   if (v.type === "failure") {
     for (const e of v.errors) issues.push({ severity: "error", message: e.message });
@@ -280,7 +301,7 @@ export function validatePolicies(policyText: string): ValidationReport {
     issues.push({ severity: "error", policyId: e.policyId, message: e.error.message });
   }
   for (const w of v.validationWarnings) {
-    issues.push({ severity: "warning", policyId: w.policyId, message: w.warning.message });
+    issues.push({ severity: "warning", policyId: w.policyId, message: w.error.message });
   }
   for (const w of v.otherWarnings) issues.push({ severity: "warning", message: w.message });
   return { ok: !issues.some((i) => i.severity === "error"), issues, policyIds, policyCount };
@@ -398,7 +419,15 @@ function probeRequests() {
     counts: Object.fromEntries(TOOL_NAMES.map((t) => [t, 0])) as Record<ToolName, number>,
     prior: {},
   };
-  const out: { request: Record<string, unknown>; entities: unknown[] }[] = [];
+  const out: {
+    request: {
+      principal: { type: string; id: string };
+      action: { type: string; id: string };
+      resource: { type: string; id: string };
+      context: cedar.Context;
+    };
+    entities: cedar.Entities;
+  }[] = [];
   for (const p of personas) {
     for (const tool of TOOL_NAMES) {
       for (const input of inputs[tool]) {
@@ -408,9 +437,9 @@ function probeRequests() {
             action: { type: ENTITY_TYPES.action, id: tool },
             resource: AGENT_RESOURCE,
             context: {
-              input,
+              input: input as cedar.CedarValueJson,
               system: { now: toCedarDatetime("2026-09-03T14:00:00Z") },
-              session: encodeSessionContext(emptySession),
+              session: encodeSessionContext(emptySession) as cedar.CedarValueJson,
             },
           },
           entities: buildEntities(p),

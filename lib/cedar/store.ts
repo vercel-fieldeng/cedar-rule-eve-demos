@@ -41,13 +41,16 @@ export async function listPolicies(): Promise<CedarPolicyRow[]> {
   return db.select().from(cedarPolicies).orderBy(cedarPolicies.createdAt, cedarPolicies.id);
 }
 
-export async function getEnabledPolicyText(): Promise<{
-  text: string;
-  ids: string[];
-}> {
+/**
+ * Enabled policies as an id-keyed record. Cedar uses the record keys as policy
+ * ids in its diagnostics, so decisions cite `refund-under-500-for-leads`
+ * instead of `policy3`.
+ */
+export async function getEnabledPolicySet(): Promise<Record<string, string>> {
   const rows = await listPolicies();
-  const enabled = rows.filter((r) => r.enabled);
-  return { text: enabled.map((r) => r.cedar).join("\n\n"), ids: enabled.map((r) => r.id) };
+  const set: Record<string, string> = {};
+  for (const r of rows) if (r.enabled) set[r.id] = r.cedar;
+  return set;
 }
 
 export async function upsertPolicy(input: {

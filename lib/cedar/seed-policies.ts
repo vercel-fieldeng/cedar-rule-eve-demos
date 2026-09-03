@@ -37,21 +37,48 @@ when {
   },
 
   /* ---------------------------------------------------------------- */
+  /* 1b. Temporal: sequencing (look up an order before a customer)      */
+  /* ---------------------------------------------------------------- */
+  {
+    id: "forbid-customer-lookup-before-order-lookup",
+    description:
+      "Human callers must look up an order before they can open a customer profile in the same session, so the agent cannot browse customers speculatively. Mirrors AgentCore temporal sequencing ('B only after A').",
+    cedar: `@id("forbid-customer-lookup-before-order-lookup")
+forbid (
+  principal is Eve::User,
+  action == ${A("lookup_customer")},
+  resource
+)
+when { context.session.counts.lookup_order == 0 };`,
+  },
+
+  /* ---------------------------------------------------------------- */
   /* 2. Service principal (IamEntity analogue)                          */
   /* ---------------------------------------------------------------- */
   {
     id: "service-reconciler-readonly",
     description:
-      "The nightly reconciler workload may look up orders and run non-PII summary exports. Mirrors AgentCore's AgentCore::IamEntity principal for machine callers.",
+      "The nightly reconciler workload may look up orders and customers. Mirrors AgentCore's AgentCore::IamEntity principal for machine callers (no JWT, identified by workload id).",
     cedar: `@id("service-reconciler-readonly")
 permit (
   principal == Eve::ServicePrincipal::"svc-nightly-reconciler",
-  action in [${A("lookup_order")}, ${A("lookup_customer")}, ${A("export_customer_data")}],
+  action in [${A("lookup_order")}, ${A("lookup_customer")}],
+  resource == ${AGENT}
+);`,
+  },
+  {
+    id: "service-reconciler-summary-exports",
+    description:
+      "The reconciler may export customer data only in summary format without PII. Shows Cedar's `has` guard for optional tool inputs, which strict validation requires.",
+    cedar: `@id("service-reconciler-summary-exports")
+permit (
+  principal == Eve::ServicePrincipal::"svc-nightly-reconciler",
+  action == ${A("export_customer_data")},
   resource == ${AGENT}
 )
 when {
-  !(action == ${A("export_customer_data")}) ||
-  (context.input.format == "summary" && context.input.includePii == false)
+  context.input.format == "summary" &&
+  !(context.input has includePii && context.input.includePii == true)
 };`,
   },
 
@@ -81,7 +108,7 @@ when {
   {
     id: "refund-large-requires-prior-approval",
     description:
-      "Refunds of 500 or more are allowed only if approve_refund already ran in this session for the same order and covered the amount. Mirrors AgentCore temporal policies (Dogwood) 'action B only after action A'.",
+      "Refunds of 500 or more are allowed only if approve_refund already ran in this session for the same order, covered the amount, and happened within the last hour. Mirrors AgentCore temporal policies (Dogwood) 'action B only after action A' plus a datetime freshness window.",
     cedar: `@id("refund-large-requires-prior-approval")
 permit (
   principal is Eve::User,
@@ -94,7 +121,8 @@ when {
   context.input.amount >= 500 &&
   context.session.prior has approve_refund &&
   context.session.prior.approve_refund.orderIds.contains(context.input.orderId) &&
-  context.session.prior.approve_refund.amountTotal >= context.input.amount
+  context.session.prior.approve_refund.amountTotal >= context.input.amount &&
+  context.system.now.durationSince(context.session.prior.approve_refund.latest) <= duration("1h")
 };`,
   },
 
@@ -124,14 +152,14 @@ when {
   {
     id: "forbid-fraud-refunds",
     description:
-      "No one, not even admins, may refund with reason 'fraud' through the agent; fraud cases go to a human queue. Mirrors AgentCore forbid guardrails that override all permits.",
+      "No one, not even admins, may refund with a reason mentioning fraud through the agent; fraud cases go to a human queue. Mirrors AgentCore forbid guardrails that override all permits, using Cedar's `like` pattern match.",
     cedar: `@id("forbid-fraud-refunds")
 forbid (
   principal,
   action == ${A("process_refund")},
   resource
 )
-when { context.input.reason == "fraud" };`,
+when { context.input.reason like "*fraud*" || context.input.reason like "*Fraud*" };`,
   },
 
   /* ---------------------------------------------------------------- */
