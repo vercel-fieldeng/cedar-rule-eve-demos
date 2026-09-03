@@ -33,6 +33,7 @@ export function AgentChat({
   embedded = false,
   onSessionId,
   resetKey,
+  autoSend,
 }: {
   readonly sessionId?: string;
   readonly sessionless?: boolean;
@@ -42,6 +43,11 @@ export function AgentChat({
   readonly onSessionId?: (sessionId: string | undefined) => void;
   /** Changing this value starts a fresh session. */
   readonly resetKey?: string | number;
+  /**
+   * When set (and its `key` changes), the message is sent automatically once
+   * the persona token is available. Used by guided scenarios in the console.
+   */
+  readonly autoSend?: { key: number; text: string } | null;
 }) {
   const [cancellationError, setCancellationError] = useState<string>();
   const [hasInputText, setHasInputText] = useState(false);
@@ -80,6 +86,16 @@ export function AgentChat({
     onSessionId?.(undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
+
+  // Guided scenarios: send the prompt as soon as the (possibly new) persona token is ready.
+  const sentAutoKey = useRef<number | null>(null);
+  useEffect(() => {
+    if (!autoSend || sentAutoKey.current === autoSend.key) return;
+    if (!identity.bearer || identity.isLoading) return;
+    sentAutoKey.current = autoSend.key;
+    void agent.send(autoSend.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSend?.key, identity.bearer, identity.isLoading]);
 
   const isBusy = agent.status === "submitted" || agent.status === "streaming";
   const isResuming = agent.status === "resuming";
