@@ -10,12 +10,13 @@ import type { Scenario } from "../_lib/scenarios";
 import { AuthorPanel } from "./author-panel";
 import { ConsoleHeader } from "./console-header";
 import { DecisionLog } from "./decision-log";
+import { HowItWorksPanel } from "./how-it-works-panel";
 import { PoliciesPanel, PolicyEditor } from "./policies-panel";
 import { ScenariosPanel } from "./scenarios-panel";
 import { SchemaPanel } from "./schema-panel";
 import { TestPanel, type TestPreset } from "./test-panel";
 
-type Tab = "decisions" | "policies" | "author" | "test" | "schema" | "scenarios";
+type Tab = "decisions" | "policies" | "author" | "test" | "schema" | "scenarios" | "how";
 
 export function ConsoleWorkbench() {
   const identity = usePersona();
@@ -77,7 +78,7 @@ export function ConsoleWorkbench() {
 
         {/* Workbench */}
         <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="flex min-h-0 flex-col gap-0">
-          <TabsList className="h-auto w-full justify-start gap-0 rounded-none border-b border-border bg-transparent p-0">
+          <TabsList className="h-auto w-full justify-start gap-0 overflow-x-auto rounded-none border-b border-border bg-transparent p-0 [scrollbar-width:none]">
             {(
               [
                 ["scenarios", "Scenarios"],
@@ -86,6 +87,7 @@ export function ConsoleWorkbench() {
                 ["author", "Author"],
                 ["test", "Test"],
                 ["schema", "Schema"],
+                ["how", "How it works"],
               ] as [Tab, string][]
             ).map(([value, label]) => (
               <TabsTrigger
@@ -139,6 +141,9 @@ export function ConsoleWorkbench() {
           </TabsContent>
           <TabsContent value="schema" className="mt-0 min-h-0 flex-1">
             <SchemaPanel />
+          </TabsContent>
+          <TabsContent value="how" className="mt-0 min-h-0 flex-1">
+            <HowItWorksPanel />
           </TabsContent>
         </Tabs>
       </div>

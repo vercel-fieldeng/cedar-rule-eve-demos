@@ -81,7 +81,16 @@ const TOKEN_RE = new RegExp(
   "g",
 );
 
-export function CedarCode({ code, className }: { code: string; className?: string }) {
+export function CedarCode({
+  code,
+  className,
+  wrap = false,
+}: {
+  code: string;
+  className?: string;
+  /** Soft-wrap long lines instead of scrolling horizontally (for prose contexts). */
+  wrap?: boolean;
+}) {
   const parts: React.ReactNode[] = [];
   let last = 0;
   for (const m of code.matchAll(TOKEN_RE)) {
@@ -106,7 +115,8 @@ export function CedarCode({ code, className }: { code: string; className?: strin
   return (
     <pre
       className={cn(
-        "overflow-x-auto rounded-md border border-border bg-code px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-foreground",
+        "min-w-0 rounded-md border border-border bg-code px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-foreground",
+        wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto",
         className,
       )}
     >
