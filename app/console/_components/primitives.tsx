@@ -1,6 +1,9 @@
 "use client";
 
 import { AlertTriangleIcon, CheckIcon, InfoIcon, XIcon } from "lucide-react";
+import { Fragment } from "react";
+import useSWR from "swr";
+import type { CodeLanguage } from "../_lib/highlight";
 import type { AnalysisFinding, ValidationIssue } from "@/lib/cedar/engine";
 import { cn } from "@/lib/utils";
 
@@ -64,63 +67,63 @@ export function ModePill({ mode, className }: { mode: "ENFORCE" | "LOG_ONLY"; cl
 }
 
 /* ------------------------------------------------------------------ */
-/* Cedar source with light tokenization                                 */
+/* Language-aware code highlighting                                    */
 /* ------------------------------------------------------------------ */
-
-const KEYWORDS =
-  /\b(permit|forbid|when|unless|principal|action|resource|context|in|has|like|is|if|then|else|true|false)\b/g;
-const TOKEN_RE = new RegExp(
-  [
-    String.raw`(@\w+\([^)]*\))`, // annotation
-    String.raw`("(?:[^"\\]|\\.)*")`, // string
-    String.raw`(\/\/[^\n]*)`, // comment
-    String.raw`(\b\d+\b)`, // number
-    String.raw`(\b[A-Z][\w]*(?:::[A-Z]?\w*)+\b)`, // entity type path
-    KEYWORDS.source,
-  ].join("|"),
-  "g",
-);
 
 export function CedarCode({
   code,
   className,
   wrap = false,
+  language = "cedar",
 }: {
   code: string;
   className?: string;
   /** Soft-wrap long lines instead of scrolling horizontally (for prose contexts). */
   wrap?: boolean;
+  language?: CodeLanguage;
 }) {
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  for (const m of code.matchAll(TOKEN_RE)) {
-    const idx = m.index ?? 0;
-    if (idx > last) parts.push(code.slice(last, idx));
-    const [text, annotation, str, comment, num, type, kw] = m;
-    let cls = "";
-    if (annotation) cls = "text-muted-foreground";
-    else if (str) cls = "text-code-string";
-    else if (comment) cls = "text-muted-foreground italic";
-    else if (num) cls = "text-foreground";
-    else if (type) cls = "text-code-type";
-    else if (kw) cls = kw === "permit" ? "text-permit font-semibold" : kw === "forbid" ? "text-forbid font-semibold" : "text-code-keyword";
-    parts.push(
-      <span key={idx} className={cls}>
-        {text}
-      </span>,
-    );
-    last = idx + text.length;
-  }
-  if (last < code.length) parts.push(code.slice(last));
+  const { data: lines, error, isLoading } = useSWR(
+    ["code-highlight", language, code],
+    async ([, lang, source]) => {
+      const { highlightCode } = await import("../_lib/highlight");
+      return highlightCode(source, lang);
+    },
+    { revalidateOnFocus: false, revalidateOnReconnect: false, shouldRetryOnError: false },
+  );
+
   return (
     <pre
+      tabIndex={0}
+      aria-label={`${language === "typescript" ? "TypeScript" : language === "cedar" ? "Cedar" : "Plain text"} code`}
       className={cn(
-        "min-w-0 rounded-md border border-border bg-code px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-foreground",
+        "min-w-0 rounded-md border border-border bg-code px-3 py-2.5 font-mono text-sm leading-relaxed text-foreground focus-visible:outline-2 focus-visible:outline-ring",
         wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto",
         className,
       )}
     >
-      <code>{parts}</code>
+      <code
+        data-language={language}
+        data-highlighter={lines ? "gpu-lexer" : error ? "plain-text" : isLoading ? "loading" : "plain-text"}
+      >
+        {lines ? lines.map((line, lineIndex) => (
+          <Fragment key={lineIndex}>
+            {lineIndex > 0 ? "\n" : null}
+            {line.map((token, tokenIndex) => (
+              <span
+                key={tokenIndex}
+                style={{
+                  color: token.color,
+                  fontStyle: (token.fontStyle ?? 0) & 1 ? "italic" : undefined,
+                  fontWeight: (token.fontStyle ?? 0) & 2 ? 600 : undefined,
+                  textDecoration: (token.fontStyle ?? 0) & 4 ? "underline" : undefined,
+                }}
+              >
+                {token.content}
+              </span>
+            ))}
+          </Fragment>
+        )) : code}
+      </code>
     </pre>
   );
 }
