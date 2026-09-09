@@ -32,6 +32,7 @@ export function PoliciesPanel({
   const { data, isLoading } = usePolicies();
   const policies = data?.policies ?? [];
   const [busy, setBusy] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
   const groups = useMemo(() => {
     const permits = policies.filter((p) => /^\s*(@[^\n]*\n\s*)*permit/m.test(p.cedar));
@@ -62,11 +63,15 @@ export function PoliciesPanel({
           <Button
             variant="ghost"
             size="sm"
-            disabled={busy === "reset"}
+            disabled={busy === "reset" || !data?.etag}
             onClick={async () => {
+              if (!data?.etag) return;
               setBusy("reset");
+              setMutationError(null);
               try {
-                await resetPolicies();
+                await resetPolicies(data.etag);
+              } catch (error) {
+                setMutationError(error instanceof Error ? error.message : "Reset failed");
               } finally {
                 setBusy(null);
               }
@@ -83,11 +88,14 @@ export function PoliciesPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {mutationError ? (
+          <p className="border-b border-border bg-forbid-muted px-4 py-2 text-xs text-forbid">{mutationError}</p>
+        ) : null}
         {isLoading && policies.length === 0 ? (
           <p className="px-4 py-6 text-sm text-muted-foreground">Loading policies…</p>
         ) : null}
-        <Group title="Forbid (always wins)" items={groups.forbids} onSelect={onSelect} busy={busy} setBusy={setBusy} />
-        <Group title="Permit" items={groups.permits} onSelect={onSelect} busy={busy} setBusy={setBusy} />
+        <Group title="Forbid (always wins)" items={groups.forbids} onSelect={onSelect} busy={busy} setBusy={setBusy} expectedEtag={data?.etag} onError={setMutationError} />
+        <Group title="Permit" items={groups.permits} onSelect={onSelect} busy={busy} setBusy={setBusy} expectedEtag={data?.etag} onError={setMutationError} />
       </div>
     </div>
   );
@@ -99,12 +107,16 @@ function Group({
   onSelect,
   busy,
   setBusy,
+  expectedEtag,
+  onError,
 }: {
   title: string;
   items: PolicyDto[];
   onSelect: (id: string) => void;
   busy: string | null;
   setBusy: (id: string | null) => void;
+  expectedEtag?: string;
+  onError: (message: string | null) => void;
 }) {
   if (items.length === 0) return null;
   return (
@@ -152,11 +164,15 @@ function Group({
                 <Switch
                   aria-label={`${p.enabled ? "Disable" : "Enable"} ${p.id}`}
                   checked={p.enabled}
-                  disabled={busy === p.id}
+                  disabled={busy === p.id || !expectedEtag}
                   onCheckedChange={async (v) => {
+                    if (!expectedEtag) return;
                     setBusy(p.id);
+                    onError(null);
                     try {
-                      await togglePolicy(p.id, v);
+                      await togglePolicy(p.id, v, expectedEtag);
+                    } catch (error) {
+                      onError(error instanceof Error ? error.message : "Policy update failed");
                     } finally {
                       setBusy(null);
                     }
@@ -201,6 +217,7 @@ export function PolicyEditor({
   /** Pre-filled draft (from the AI author panel). */
   initial?: { id: string; description: string; cedar: string };
 }) {
+  const { data: policyConfig } = usePolicies();
   const [id, setId] = useState(policy?.id ?? initial?.id ?? "");
   const [description, setDescription] = useState(policy?.description ?? initial?.description ?? "");
   const [cedar, setCedar] = useState(policy?.cedar ?? initial?.cedar ?? TEMPLATE);
@@ -210,7 +227,7 @@ export function PolicyEditor({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
 
-  const canSave = id.trim().length > 0 && cedar.trim().length > 0 && status === "idle";
+  const canSave = id.trim().length > 0 && cedar.trim().length > 0 && status === "idle" && Boolean(policyConfig?.etag);
 
   async function runValidate() {
     setStatus("validating");
@@ -227,6 +244,7 @@ export function PolicyEditor({
   }
 
   async function runSave() {
+    if (!policyConfig?.etag) return;
     setStatus("saving");
     setError(null);
     try {
@@ -234,6 +252,7 @@ export function PolicyEditor({
         id: id.trim(),
         description: description.trim(),
         cedar,
+        expectedEtag: policyConfig.etag,
         origin: policy?.origin ?? (initial ? "ai" : "console"),
       });
       setValidation(out.validation);
@@ -265,12 +284,16 @@ export function PolicyEditor({
               variant="ghost"
               size="icon-sm"
               aria-label="Delete policy"
-              disabled={status !== "idle"}
+              disabled={status !== "idle" || !policyConfig?.etag}
               onClick={async () => {
+                if (!policyConfig?.etag) return;
                 setStatus("deleting");
+                setError(null);
                 try {
-                  await deletePolicy(policy.id);
+                  await deletePolicy(policy.id, policyConfig.etag);
                   onBack();
+                } catch (error) {
+                  setError(error instanceof Error ? error.message : "Delete failed");
                 } finally {
                   setStatus("idle");
                 }

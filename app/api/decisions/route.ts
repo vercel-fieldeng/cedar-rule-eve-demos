@@ -4,27 +4,23 @@ import { clearDecisions, listDecisions } from "@/lib/cedar/store";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * GET /api/decisions?sessionId=&afterId=&limit=
- *
- * The authorization audit log (AgentCore ships these to CloudWatch). The
- * console polls this with SWR to render decisions as they land.
- */
+const noStore = { "Cache-Control": "no-store" };
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const sessionId = url.searchParams.get("sessionId") ?? undefined;
-  const afterId = url.searchParams.get("afterId");
-  const limit = url.searchParams.get("limit");
+  const afterId = url.searchParams.get("afterId") ?? undefined;
+  const parsedLimit = Number(url.searchParams.get("limit") ?? 100);
   const decisions = await listDecisions({
     sessionId,
-    afterId: afterId ? Number(afterId) : undefined,
-    limit: limit ? Number(limit) : undefined,
+    afterId,
+    limit: Number.isFinite(parsedLimit) ? parsedLimit : 100,
   });
-  return NextResponse.json({ decisions }, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ decisions }, { headers: noStore });
 }
 
-/** DELETE /api/decisions — clear the log. */
-export async function DELETE() {
-  await clearDecisions();
-  return NextResponse.json({ ok: true });
+export async function DELETE(request: Request) {
+  const sessionId = new URL(request.url).searchParams.get("sessionId") ?? undefined;
+  const deleted = await clearDecisions(sessionId);
+  return NextResponse.json({ ok: true, deleted, scope: sessionId ? "session" : "all" }, { headers: noStore });
 }

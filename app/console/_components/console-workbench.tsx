@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useReducer, useState } from "react";
 import { AgentChat } from "@/app/_components/agent-chat";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePersona } from "@/lib/personas/use-persona";
 import { cn } from "@/lib/utils";
 import type { AuthorResponse } from "../_lib/api";
+import { initialScenarioUiState, scenarioUiReducer } from "../_lib/scenario-state";
 import type { Scenario } from "../_lib/scenarios";
 import { AuthorPanel } from "./author-panel";
 import { ConsoleHeader } from "./console-header";
@@ -22,27 +23,32 @@ export function ConsoleWorkbench() {
   const identity = usePersona();
   const [tab, setTab] = useState<Tab>("scenarios");
   const [sessionId, setSessionId] = useState<string | undefined>();
-  const [resetCounter, setResetCounter] = useState(0);
-  const [autoSend, setAutoSend] = useState<{ key: number; text: string } | null>(null);
+  const [scenarioState, dispatchScenario] = useReducer(scenarioUiReducer, initialScenarioUiState);
   const [scope, setScope] = useState<"session" | "all">("session");
   const [selectedPolicy, setSelectedPolicy] = useState<string | null>(null);
   const [aiDraft, setAiDraft] = useState<AuthorResponse["draft"] | null>(null);
   const [testPreset, setTestPreset] = useState<TestPreset | null>(null);
 
-  // A persona switch invalidates the current session (different principal).
-  const resetKey = `${identity.personaId}:${resetCounter}`;
+  const resetKey = `${identity.personaId}:${scenarioState.sessionNonce}`;
 
   const newSession = useCallback(() => {
-    setResetCounter((c) => c + 1);
+    dispatchScenario({ type: "new-session" });
     setSessionId(undefined);
-    setAutoSend(null);
   }, []);
 
+  const selectPersona = useCallback(
+    (personaId: string) => {
+      dispatchScenario({ type: "manual-persona-change" });
+      setSessionId(undefined);
+      identity.select(personaId);
+    },
+    [identity],
+  );
+
   function runScenario(s: Scenario) {
-    if (identity.personaId !== s.personaId) identity.select(s.personaId);
-    setResetCounter((c) => c + 1);
+    dispatchScenario({ type: "run-scenario", text: s.prompt });
     setSessionId(undefined);
-    setAutoSend({ key: Date.now(), text: s.prompt });
+    if (identity.personaId !== s.personaId) identity.select(s.personaId);
     setScope("session");
     setTab("decisions");
   }
@@ -61,7 +67,7 @@ export function ConsoleWorkbench() {
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
-      <ConsoleHeader onNewSession={newSession} />
+      <ConsoleHeader onNewSession={newSession} onSelectPersona={selectPersona} />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         {/* Chat */}
@@ -72,7 +78,8 @@ export function ConsoleWorkbench() {
             sessionless
             resetKey={resetKey}
             onSessionId={setSessionId}
-            autoSend={autoSend}
+            autoSend={scenarioState.command ? { key: scenarioState.command.nonce, text: scenarioState.command.text } : null}
+            onAutoSendConsumed={(nonce) => dispatchScenario({ type: "consume-command", nonce })}
           />
         </div>
 

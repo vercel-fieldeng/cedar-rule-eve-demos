@@ -69,7 +69,7 @@ function sessionRecordType(): string {
     (t) =>
       `${t}?: { count: Long, latest: datetime, orderIds: Set<String>, customerIds: Set<String>, amountTotal: Long }`,
   ).join(", ");
-  return `{ id: String, turn: Long, counts: { ${counts} }, prior: { ${prior} } }`;
+  return `{ id: String, turn: Long, counts: { ${counts} }, prior: { ${prior} }, refundApproval?: { orderId: String, availableAmount: Long, latest: datetime } }`;
 }
 
 export function generateCedarSchema(): string {

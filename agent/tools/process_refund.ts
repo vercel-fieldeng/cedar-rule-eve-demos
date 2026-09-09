@@ -12,10 +12,10 @@ export default guarded("process_refund", {
   inputSchema: TOOL_CATALOG.process_refund.inputSchema,
   execute({ orderId, amount, reason }) {
     const order = demoStore.getOrder(orderId);
-    if (!order) return { ok: false, error: `Unknown order ${orderId}` };
+    if (!order) return { ok: false, error: `Unknown order ${orderId}`, simulated: true };
     const refundable = order.total - order.refunded;
     if (amount > refundable) {
-      return { ok: false, error: `Refund of ${amount} exceeds refundable balance ${refundable}` };
+      return { ok: false, error: `Refund of ${amount} exceeds refundable balance ${refundable}`, simulated: true };
     }
     const refundedAfter = order.refunded + amount;
     return {

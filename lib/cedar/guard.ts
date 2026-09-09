@@ -1,37 +1,26 @@
 import { defineTool, type ToolContext } from "eve/tools";
 import type { z } from "zod";
-import { authorize, principalFromSessionAuth } from "@/lib/cedar/engine";
 import type { ToolName } from "@/lib/cedar/catalog";
-
-/**
- * The Cedar enforcement point.
- *
- * eve hooks are observe-only, so enforcement lives at the tool boundary:
- * every business tool is wrapped with `guarded(...)`. Before `execute` runs we:
- *
- *   1. Resolve the Cedar principal from the eve session auth (JWT claims -> tags).
- *   2. Build the request (action = tool name, resource = the agent, context.input = tool input,
- *      context.system.now, context.session = temporal facts derived from the decision log).
- *   3. Ask the Cedar engine for a decision and record it.
- *   4. In ENFORCE mode a DENY short-circuits and returns a structured denial to the model.
- *      In LOG_ONLY mode the decision is recorded but the tool still executes.
- *
- * This mirrors the AgentCore Gateway -> Policy Engine interception, expressed
- * as a single composable wrapper inside eve.
- */
+import { authorizationRunner } from "@/lib/cedar/operation-runner";
+import { principalFromSessionAuth } from "@/lib/personas/principal";
 
 export interface GuardedToolOptions<TSchema extends z.ZodType> {
   description: string;
   inputSchema: TSchema;
   execute: (input: z.infer<TSchema>, ctx: ToolContext) => Promise<unknown> | unknown;
+  isSuccess?: (output: unknown) => boolean;
 }
 
 export interface PolicyDenied {
+  authorized: false;
   denied: true;
   decision: "DENY";
+  outcome: "blocked";
   action: string;
+  policyRevision: number;
   reason: string;
   determiningPolicies: string[];
+  errors: string[];
   hint: string;
 }
 
@@ -41,40 +30,58 @@ export function guarded<TSchema extends z.ZodType>(action: ToolName, options: Gu
     inputSchema: options.inputSchema,
     async execute(input, ctx) {
       const principal = principalFromSessionAuth(ctx.session.auth.current);
-      const result = await authorize({
+      const result = await authorizationRunner.run({
         principal,
         action,
         input: input as Record<string, unknown>,
         sessionId: ctx.session.id,
         turn: ctx.session.turn.sequence,
+        execute: async () => options.execute(input as z.infer<TSchema>, ctx),
+        isSuccess: options.isSuccess,
       });
 
-      if (result.enforced) {
+      if (result.kind === "blocked") {
+        const evaluationFailed = !result.evaluation.valid;
         const denial: PolicyDenied = {
+          authorized: false,
           denied: true,
           decision: "DENY",
+          outcome: "blocked",
           action,
-          reason:
-            result.determiningPolicies.length > 0
-              ? `Blocked by Cedar policy: ${result.determiningPolicies.join(", ")}`
+          policyRevision: result.evaluation.policyRevision,
+          reason: evaluationFailed
+            ? "Cedar evaluation failed closed; the tool was not executed."
+            : result.evaluation.determiningPolicies.length > 0
+              ? `Blocked by Cedar policy: ${result.evaluation.determiningPolicies.join(", ")}`
               : "No Cedar policy permits this action for the current principal (default deny).",
-          determiningPolicies: result.determiningPolicies,
-          hint: "Tell the user which policy blocked the request and what they can do instead. Do not retry with different parameters unless the user asks.",
+          determiningPolicies: result.evaluation.determiningPolicies,
+          errors: result.evaluation.errors,
+          hint: "Explain the denial and do not claim that the business operation happened.",
         };
         return denial;
       }
 
-      const output = await options.execute(input as z.infer<TSchema>, ctx);
-      if (result.decision === "DENY") {
-        // LOG_ONLY mode: surface the would-be denial next to the real result.
-        const base =
-          typeof output === "object" && output !== null ? (output as Record<string, unknown>) : { result: output };
-        return {
-          ...base,
-          _policy: { mode: "LOG_ONLY", wouldDeny: true, determiningPolicies: result.determiningPolicies },
-        };
-      }
-      return output;
+      const base =
+        typeof result.output === "object" && result.output !== null
+          ? (result.output as Record<string, unknown>)
+          : { result: result.output };
+      return {
+        ...base,
+        authorized: true,
+        outcome: result.outcome,
+        decisionId: result.decisionId,
+        policyRevision: result.evaluation.policyRevision,
+        ...(result.evaluation.decision === "DENY"
+          ? {
+              logOnly: true,
+              _policy: {
+                mode: "LOG_ONLY",
+                wouldDeny: true,
+                determiningPolicies: result.evaluation.determiningPolicies,
+              },
+            }
+          : {}),
+      };
     },
   });
 }

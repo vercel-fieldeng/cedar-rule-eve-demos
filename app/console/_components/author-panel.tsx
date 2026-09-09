@@ -5,7 +5,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { type AuthorResponse, authorPolicy, savePolicy } from "../_lib/api";
+import { type AuthorResponse, authorPolicy, savePolicy, usePolicies } from "../_lib/api";
 import { CedarCode, Eyebrow, IssueList } from "./primitives";
 
 const EXAMPLES = [
@@ -16,6 +16,7 @@ const EXAMPLES = [
 ];
 
 export function AuthorPanel({ onOpenInEditor }: { onOpenInEditor: (draft: AuthorResponse["draft"]) => void }) {
+  const { data: policyConfig } = usePolicies();
   const [prompt, setPrompt] = useState("");
   const [result, setResult] = useState<AuthorResponse | null>(null);
   const [status, setStatus] = useState<"idle" | "generating" | "saving">("idle");
@@ -41,7 +42,7 @@ export function AuthorPanel({ onOpenInEditor }: { onOpenInEditor: (draft: Author
   }
 
   async function save() {
-    if (!result) return;
+    if (!result || !policyConfig?.etag) return;
     setStatus("saving");
     setError(null);
     try {
@@ -49,6 +50,7 @@ export function AuthorPanel({ onOpenInEditor }: { onOpenInEditor: (draft: Author
         id: result.draft.id,
         description: result.draft.description,
         cedar: result.draft.cedar,
+        expectedEtag: policyConfig.etag,
         origin: "ai",
         enabled: false,
       });
@@ -144,7 +146,7 @@ export function AuthorPanel({ onOpenInEditor }: { onOpenInEditor: (draft: Author
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
-                disabled={!result.validation.ok || status !== "idle" || savedId !== null}
+                disabled={!result.validation.ok || status !== "idle" || savedId !== null || !policyConfig?.etag}
                 onClick={save}
               >
                 {savedId ? "Saved (disabled)" : status === "saving" ? "Saving…" : "Save as disabled"}

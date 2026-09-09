@@ -101,6 +101,11 @@ export function TestPanel({
                   amountTotal: typeof input.amount === "number" ? input.amount : 0,
                 },
               },
+              refundApproval: {
+                orderId,
+                availableAmount: typeof input.amount === "number" ? input.amount : 0,
+                latest: new Date(Date.now() - 5 * 60_000).toISOString(),
+              },
             }
           : undefined,
         draft: includeDraft && draft ? draft : undefined,
@@ -232,7 +237,7 @@ function ResultCard({ result, policyIds }: { result: AuthorizeResult; policyIds:
     <div className="flex flex-col gap-3 rounded-md border border-border p-3">
       <div className="flex items-center justify-between gap-2">
         <DecisionBadge decision={result.decision} size="lg" />
-        <span className="font-mono text-[11px] text-muted-foreground">{Math.round(result.durationMs)} ms</span>
+        <span className="font-mono text-[11px] text-muted-foreground">policy v{result.policyRevision} · {Math.round(result.durationMs)} ms</span>
       </div>
 
       <div className="flex flex-col gap-1">

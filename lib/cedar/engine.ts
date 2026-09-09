@@ -1,57 +1,15 @@
 import * as cedar from "@cedar-policy/cedar-wasm/nodejs";
-import type { EngineMode } from "../db/schema";
+import type { AuthorizationSessionDocument, EngineMode } from "./documents";
 import { AGENT_ID, TOOL_NAMES, type ToolName } from "./catalog";
 import { AGENT_RESOURCE, ENTITY_TYPES, getCedarSchema } from "./schema";
-import {
-  getEnabledPolicySet,
-  getEngineMode,
-  listExecutedActionsForSession,
-  recordDecision,
-} from "./store";
 
-/**
- * A Cedar policy set keyed by policy id. Cedar reports these keys in
- * `diagnostics.reason`, which is how decisions cite human-readable ids.
- */
 export type PolicySet = Record<string, string>;
 
-/* ------------------------------------------------------------------ */
-/* Principal                                                            */
-/* ------------------------------------------------------------------ */
-
 export interface CedarPrincipal {
-  /** "user" -> Eve::User, "service" -> Eve::ServicePrincipal */
   readonly kind: "user" | "service";
   readonly id: string;
-  /** String-valued claims. Arrays are joined with a space so `like` works. */
   readonly tags: Readonly<Record<string, string>>;
 }
-
-/** Builds a Cedar principal from eve's verified session auth attributes. */
-export function principalFromSessionAuth(auth: {
-  readonly principalId: string;
-  readonly principalType: string;
-  readonly subject?: string;
-  readonly attributes: Readonly<Record<string, string | readonly string[]>>;
-} | null): CedarPrincipal {
-  if (!auth) {
-    return { kind: "service", id: "anonymous-local-dev", tags: { role: "local-dev" } };
-  }
-  const tags: Record<string, string> = {};
-  for (const [k, v] of Object.entries(auth.attributes)) {
-    tags[k] = Array.isArray(v) ? (v as readonly string[]).join(" ") : (v as string);
-  }
-  const isService = tags.principal_kind === "service" || auth.principalType === "vercel-oidc";
-  return {
-    kind: isService ? "service" : "user",
-    id: auth.subject ?? auth.principalId,
-    tags,
-  };
-}
-
-/* ------------------------------------------------------------------ */
-/* Context                                                              */
-/* ------------------------------------------------------------------ */
 
 interface PriorSummary {
   count: number;
@@ -61,89 +19,158 @@ interface PriorSummary {
   amountTotal: number;
 }
 
+export interface RefundApprovalContext {
+  orderId: string;
+  availableAmount: number;
+  latest: string;
+}
+
 export interface SessionCedarContext {
   id: string;
   turn: number;
   counts: Record<ToolName, number>;
   prior: Partial<Record<ToolName, PriorSummary>>;
+  refundApproval?: RefundApprovalContext;
 }
 
-/**
- * Builds `context.session` from the decision log: every action that actually
- * executed earlier in this eve session. This provides temporal policy parity
- * (approval-before, count caps, budget caps) without a separate policy-session
- * service.
- */
-export async function buildSessionContext(sessionId: string, turn: number): Promise<SessionCedarContext> {
-  const rows = await listExecutedActionsForSession(sessionId);
-  const counts = Object.fromEntries(TOOL_NAMES.map((t) => [t, 0])) as Record<ToolName, number>;
-  const prior: Partial<Record<ToolName, PriorSummary>> = {};
-  for (const row of rows) {
-    const tool = row.action as ToolName;
-    if (!(tool in counts)) continue;
-    counts[tool] += 1;
-    const input = (row.input ?? {}) as Record<string, unknown>;
-    const entry = (prior[tool] ??= {
-      count: 0,
-      latest: row.createdAt.toISOString(),
-      orderIds: [],
-      customerIds: [],
-      amountTotal: 0,
-    });
-    entry.count += 1;
-    entry.latest = row.createdAt.toISOString();
-    if (typeof input.orderId === "string" && !entry.orderIds.includes(input.orderId)) {
-      entry.orderIds.push(input.orderId);
-    }
-    if (typeof input.customerId === "string" && !entry.customerIds.includes(input.customerId)) {
-      entry.customerIds.push(input.customerId);
-    }
-    if (typeof input.amount === "number") entry.amountTotal += Math.trunc(input.amount);
+function operationTime(operation: { completedAt?: string; createdAt?: string }): string {
+  return operation.completedAt ?? operation.createdAt ?? new Date(0).toISOString();
+}
+
+function addToSummary(
+  prior: SessionCedarContext["prior"],
+  action: ToolName,
+  input: Record<string, unknown>,
+  timestamp: string,
+) {
+  const entry = (prior[action] ??= {
+    count: 0,
+    latest: timestamp,
+    orderIds: [],
+    customerIds: [],
+    amountTotal: 0,
+  });
+  entry.count += 1;
+  if (timestamp > entry.latest) entry.latest = timestamp;
+  if (typeof input.orderId === "string" && !entry.orderIds.includes(input.orderId)) entry.orderIds.push(input.orderId);
+  if (typeof input.customerId === "string" && !entry.customerIds.includes(input.customerId)) {
+    entry.customerIds.push(input.customerId);
   }
-  return { id: sessionId, turn, counts, prior };
+  if (typeof input.amount === "number") entry.amountTotal += Math.trunc(input.amount);
+}
+
+export function pruneExpiredReservations(state: AuthorizationSessionDocument, now: string): AuthorizationSessionDocument {
+  return {
+    ...state,
+    reservations: state.reservations.filter((reservation) => reservation.expiresAt > now),
+  };
+}
+
+export function buildSessionContext(
+  state: AuthorizationSessionDocument,
+  now: string,
+  turn = 0,
+  currentInput: Record<string, unknown> = {},
+): SessionCedarContext {
+  const active = state.reservations.filter((reservation) => reservation.expiresAt > now);
+  const counts = Object.fromEntries(TOOL_NAMES.map((tool) => [tool, 0])) as Record<ToolName, number>;
+  const prior: SessionCedarContext["prior"] = {};
+
+  for (const operation of state.completed) {
+    counts[operation.action] += 1;
+    addToSummary(prior, operation.action, operation.input, operation.completedAt);
+  }
+  for (const reservation of active) {
+    counts[reservation.action] += 1;
+    if (reservation.action === "process_refund") {
+      addToSummary(prior, reservation.action, reservation.input, reservation.createdAt);
+    }
+  }
+
+  const orderId = typeof currentInput.orderId === "string" ? currentInput.orderId : undefined;
+  let refundApproval: RefundApprovalContext | undefined;
+  if (orderId) {
+    const cutoff = new Date(new Date(now).getTime() - 60 * 60 * 1000).toISOString();
+    const approvals = state.completed.filter(
+      (operation) =>
+        operation.action === "approve_refund" &&
+        operation.input.orderId === orderId &&
+        operation.completedAt >= cutoff,
+    );
+    if (approvals.length > 0) {
+      const earliest = approvals.reduce(
+        (value, operation) => (operation.completedAt < value ? operation.completedAt : value),
+        approvals[0].completedAt,
+      );
+      const approved = approvals.reduce(
+        (sum, operation) => sum + (typeof operation.input.amount === "number" ? operation.input.amount : 0),
+        0,
+      );
+      const consumed = [...state.completed, ...active]
+        .filter(
+          (operation) =>
+            operation.action === "process_refund" &&
+            operation.input.orderId === orderId &&
+            operationTime(operation) >= earliest,
+        )
+        .reduce(
+          (sum, operation) => sum + (typeof operation.input.amount === "number" ? operation.input.amount : 0),
+          0,
+        );
+      refundApproval = {
+        orderId,
+        availableAmount: Math.max(0, Math.trunc(approved - consumed)),
+        latest: approvals.reduce(
+          (value, operation) => (operation.completedAt > value ? operation.completedAt : value),
+          approvals[0].completedAt,
+        ),
+      };
+    }
+  }
+
+  return { id: state.sessionId, turn, counts, prior, refundApproval };
 }
 
 function toCedarDatetime(iso: string) {
   return { __extn: { fn: "datetime", arg: iso } };
 }
 
-/** Encodes the JS session context into Cedar JSON (datetime extension values). */
-function encodeSessionContext(s: SessionCedarContext) {
+function encodeSessionContext(session: SessionCedarContext) {
   const prior: Record<string, unknown> = {};
-  for (const [tool, p] of Object.entries(s.prior)) {
-    if (!p) continue;
-    prior[tool] = { ...p, latest: toCedarDatetime(p.latest) };
+  for (const [tool, summary] of Object.entries(session.prior)) {
+    if (summary) prior[tool] = { ...summary, latest: toCedarDatetime(summary.latest) };
   }
-  return { id: s.id, turn: s.turn, counts: s.counts, prior };
+  return {
+    id: session.id,
+    turn: session.turn,
+    counts: session.counts,
+    prior,
+    ...(session.refundApproval
+      ? { refundApproval: { ...session.refundApproval, latest: toCedarDatetime(session.refundApproval.latest) } }
+      : {}),
+  };
 }
-
-/* ------------------------------------------------------------------ */
-/* Authorization                                                        */
-/* ------------------------------------------------------------------ */
 
 export interface AuthorizeRequest {
   principal: CedarPrincipal;
   action: ToolName;
   input: Record<string, unknown>;
-  sessionId: string;
-  turn: number;
-  /** Override "now" (ISO). Used by the dry-run tester. */
-  now?: string;
-  /** Override session context (dry-run). */
-  session?: SessionCedarContext;
-  /** Override policies (dry-run against unsaved edits). */
-  policies?: PolicySet;
+  policies: PolicySet;
+  mode: EngineMode;
+  policyRevision: number;
+  now: string;
+  session: SessionCedarContext;
 }
 
 export interface AuthorizeResult {
   decision: "ALLOW" | "DENY";
   mode: EngineMode;
-  /** True when the tool was blocked (DENY in ENFORCE). */
+  policyRevision: number;
   enforced: boolean;
+  valid: boolean;
   determiningPolicies: string[];
   errors: string[];
   durationMs: number;
-  /** The exact Cedar request, for the console's "explain" view. */
   request: {
     principal: { type: string; id: string };
     action: { type: string; id: string };
@@ -153,99 +180,65 @@ export interface AuthorizeResult {
   entities: unknown[];
 }
 
-function buildEntities(p: CedarPrincipal): cedar.Entities {
-  const type = p.kind === "user" ? ENTITY_TYPES.user : ENTITY_TYPES.service;
+function buildEntities(principal: CedarPrincipal): cedar.Entities {
+  const type = principal.kind === "user" ? ENTITY_TYPES.user : ENTITY_TYPES.service;
   return [
-    { uid: { type, id: p.id }, attrs: {}, parents: [], tags: { ...p.tags } },
-    { uid: { type: AGENT_RESOURCE.type, id: AGENT_RESOURCE.id }, attrs: {}, parents: [] },
+    { uid: { type, id: principal.id }, attrs: {}, parents: [], tags: { ...principal.tags } },
+    { uid: AGENT_RESOURCE, attrs: {}, parents: [] },
   ];
 }
 
-/** Pure evaluation: no DB reads, no logging. Used by `authorize` and dry-run. */
-export async function evaluate(
-  req: AuthorizeRequest & { policies: PolicySet; mode: EngineMode },
-): Promise<AuthorizeResult> {
+export async function evaluate(requestInput: AuthorizeRequest): Promise<AuthorizeResult> {
   const started = performance.now();
-  const now = req.now ?? new Date().toISOString();
-  const session = req.session ?? (await buildSessionContext(req.sessionId, req.turn));
-  const principalType = req.principal.kind === "user" ? ENTITY_TYPES.user : ENTITY_TYPES.service;
-
+  const principalType = requestInput.principal.kind === "user" ? ENTITY_TYPES.user : ENTITY_TYPES.service;
   const request = {
-    principal: { type: principalType, id: req.principal.id },
-    action: { type: ENTITY_TYPES.action, id: req.action },
-    resource: { type: AGENT_RESOURCE.type, id: AGENT_RESOURCE.id },
+    principal: { type: principalType, id: requestInput.principal.id },
+    action: { type: ENTITY_TYPES.action, id: requestInput.action },
+    resource: AGENT_RESOURCE,
     context: {
-      input: req.input as cedar.CedarValueJson,
-      system: { now: toCedarDatetime(now) },
-      session: encodeSessionContext(session) as cedar.CedarValueJson,
+      input: requestInput.input as cedar.CedarValueJson,
+      system: { now: toCedarDatetime(requestInput.now) },
+      session: encodeSessionContext(requestInput.session) as cedar.CedarValueJson,
     },
   };
-  const entities = buildEntities(req.principal);
-
-  const result = cedar.isAuthorized({
-    ...request,
-    policies: { staticPolicies: req.policies },
-    entities,
-    schema: getCedarSchema(),
-  });
-
+  const entities = buildEntities(requestInput.principal);
   let decision: "ALLOW" | "DENY" = "DENY";
   let determiningPolicies: string[] = [];
   let errors: string[] = [];
 
-  if (result.type === "success") {
-    decision = result.response.decision === "allow" ? "ALLOW" : "DENY";
-    determiningPolicies = Array.from(result.response.diagnostics.reason);
-    errors = result.response.diagnostics.errors.map((e) => `${e.policyId}: ${e.error.message}`);
-  } else {
-    errors = result.errors.map((e) => e.message);
+  try {
+    const result = cedar.isAuthorized({
+      ...request,
+      policies: { staticPolicies: requestInput.policies },
+      entities,
+      schema: getCedarSchema(),
+    });
+    if (result.type === "success") {
+      decision = result.response.decision === "allow" ? "ALLOW" : "DENY";
+      determiningPolicies = Array.from(result.response.diagnostics.reason);
+      errors = result.response.diagnostics.errors.map((error) => `${error.policyId}: ${error.error.message}`);
+    } else {
+      errors = result.errors.map((error) => error.message);
+    }
+  } catch (error) {
+    errors = [error instanceof Error ? error.message : String(error)];
   }
 
-  const enforced = decision === "DENY" && req.mode === "ENFORCE";
+  const valid = errors.length === 0;
+  const enforced = !valid || (decision === "DENY" && requestInput.mode === "ENFORCE");
   return {
     decision,
-    mode: req.mode,
+    mode: requestInput.mode,
+    policyRevision: requestInput.policyRevision,
     enforced,
+    valid,
     determiningPolicies,
     errors,
     durationMs: Math.round((performance.now() - started) * 100) / 100,
-    request: { ...request, context: { ...request.context, system: { now } } },
+    request: { ...request, context: { ...request.context, system: { now: requestInput.now } } },
     entities,
   };
 }
-
-/** Live authorization used by the tool guard: loads policies + mode, logs the decision. */
-export async function authorize(req: AuthorizeRequest): Promise<AuthorizeResult & { decisionId: number }> {
-  const [policies, mode] = await Promise.all([getEnabledPolicySet(), getEngineMode()]);
-  const result = await evaluate({ ...req, policies, mode });
-  const decisionId = await recordDecision({
-    sessionId: req.sessionId,
-    principalType: req.principal.kind === "user" ? ENTITY_TYPES.user : ENTITY_TYPES.service,
-    principalId: req.principal.id,
-    action: req.action,
-    resource: `${AGENT_RESOURCE.type}::"${AGENT_ID}"`,
-    input: req.input,
-    context: {
-      principalTags: req.principal.tags,
-      system: (result.request.context as { system: unknown }).system,
-      session: {
-        turn: req.turn,
-        counts: (result.request.context as { session: SessionCedarContext }).session.counts,
-      },
-    },
-    decision: result.decision,
-    mode,
-    enforced: result.enforced,
-    determiningPolicies: result.determiningPolicies,
-    errors: result.errors,
-    durationMs: result.durationMs,
-  });
-  return { ...result, decisionId };
-}
-
-/* ------------------------------------------------------------------ */
-/* Validation & analysis                                                */
-/* ------------------------------------------------------------------ */
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -256,60 +249,50 @@ export interface ValidationIssue {
 export interface ValidationReport {
   ok: boolean;
   issues: ValidationIssue[];
-  /** Ids parsed from @id annotations, in order. */
   policyIds: string[];
   policyCount: number;
 }
 
-/**
- * Strict schema validation against the generated schema (AgentCore validates on create).
- * Accepts a single policy's text or an id-keyed policy set.
- */
 export function validatePolicies(policies: string | PolicySet): ValidationReport {
   const issues: ValidationIssue[] = [];
-  let policyIds: string[] = [];
-  let policyCount = 0;
-
   const asText = typeof policies === "string" ? policies : Object.values(policies).join("\n\n");
   const parsed = cedar.policySetTextToParts(asText);
   if (parsed.type === "failure") {
-    for (const e of parsed.errors) issues.push({ severity: "error", message: e.message });
-    return { ok: false, issues, policyIds, policyCount };
+    return { ok: false, issues: parsed.errors.map((error) => ({ severity: "error", message: error.message })), policyIds: [], policyCount: 0 };
   }
-  policyCount = parsed.policies.length;
-  policyIds =
+  const policyIds =
     typeof policies === "string"
-      ? parsed.policies.map((p) => idAnnotationOf(p)).filter((x): x is string => Boolean(x))
+      ? parsed.policies.map((policy) => idAnnotationOf(policy)).filter((id): id is string => Boolean(id))
       : Object.keys(policies);
-
-  // Single text with several policies: key each by its @id so diagnostics are readable.
   const staticPolicies: PolicySet =
     typeof policies === "string"
-      ? Object.fromEntries(parsed.policies.map((p, i) => [idAnnotationOf(p) ?? `policy${i}`, p]))
+      ? Object.fromEntries(parsed.policies.map((policy, index) => [idAnnotationOf(policy) ?? `policy${index}`, policy]))
       : policies;
-
-  const v = cedar.validate({
+  const validation = cedar.validate({
     validationSettings: { mode: "strict" },
     schema: getCedarSchema(),
     policies: { staticPolicies },
   });
-  if (v.type === "failure") {
-    for (const e of v.errors) issues.push({ severity: "error", message: e.message });
-    return { ok: false, issues, policyIds, policyCount };
+  if (validation.type === "failure") {
+    return {
+      ok: false,
+      issues: validation.errors.map((error) => ({ severity: "error", message: error.message })),
+      policyIds,
+      policyCount: parsed.policies.length,
+    };
   }
-  for (const e of v.validationErrors) {
-    issues.push({ severity: "error", policyId: e.policyId, message: e.error.message });
+  for (const error of validation.validationErrors) {
+    issues.push({ severity: "error", policyId: error.policyId, message: error.error.message });
   }
-  for (const w of v.validationWarnings) {
-    issues.push({ severity: "warning", policyId: w.policyId, message: w.error.message });
+  for (const warning of validation.validationWarnings) {
+    issues.push({ severity: "warning", policyId: warning.policyId, message: warning.error.message });
   }
-  for (const w of v.otherWarnings) issues.push({ severity: "warning", message: w.message });
-  return { ok: !issues.some((i) => i.severity === "error"), issues, policyIds, policyCount };
+  for (const warning of validation.otherWarnings) issues.push({ severity: "warning", message: warning.message });
+  return { ok: !issues.some((issue) => issue.severity === "error"), issues, policyIds, policyCount: parsed.policies.length };
 }
 
 function idAnnotationOf(policyText: string): string | undefined {
-  const m = policyText.match(/@id\("([^"]+)"\)/);
-  return m?.[1];
+  return policyText.match(/@id\("([^"]+)"\)/)?.[1];
 }
 
 export interface AnalysisFinding {
@@ -317,144 +300,33 @@ export interface AnalysisFinding {
   message: string;
 }
 
-/**
- * Lightweight policy analysis, the eve-side analogue of AgentCore's
- * "policy analysis" (always allow / always deny / impossible). Uses structural
- * checks plus a probe matrix of representative requests.
- */
 export function analyzePolicy(policyText: string): AnalysisFinding[] {
   const findings: AnalysisFinding[] = [];
   const parsed = cedar.policySetTextToParts(policyText);
   if (parsed.type === "failure" || parsed.policies.length === 0) return findings;
-  const single = parsed.policies[0];
-  const effect = /^\s*(?:@\w+\([^)]*\)\s*)*permit/.test(single) ? "permit" : "forbid";
-
-  const scopeAll = /(permit|forbid)\s*\(\s*principal\s*,\s*action\s*,\s*resource\s*\)/.test(single);
-  const hasWhen = /\bwhen\s*\{/.test(single);
-  const hasUnless = /\bunless\s*\{/.test(single);
-
+  const policy = parsed.policies[0];
+  const effect = /^\s*(?:@\w+\([^)]*\)\s*)*permit/.test(policy) ? "permit" : "forbid";
+  const scopeAll = /(permit|forbid)\s*\(\s*principal\s*,\s*action\s*,\s*resource\s*\)/.test(policy);
+  const hasWhen = /\bwhen\s*\{/.test(policy);
+  const hasUnless = /\bunless\s*\{/.test(policy);
   if (scopeAll && !hasWhen && !hasUnless) {
     findings.push({
       kind: effect === "permit" ? "always-permits" : "always-forbids",
-      message:
-        effect === "permit"
-          ? "Unconditional permit on every principal, action and resource. This grants full access to the agent."
-          : "Unconditional forbid on every principal, action and resource. This blocks every tool call.",
+      message: effect === "permit" ? "Unconditional permit for every request." : "Unconditional forbid for every request.",
     });
   } else if (!hasWhen && !hasUnless) {
-    findings.push({
-      kind: "unconditional",
-      message: `This ${effect} has a scope but no when/unless clause; it fires for every request matching the scope.`,
-    });
+    findings.push({ kind: "unconditional", message: `This ${effect} fires for every request matching its scope.` });
   }
-
-  if (/when\s*\{\s*(false)\s*\}/.test(single)) {
-    findings.push({ kind: "never-fires", message: "The when clause is literally false; this policy can never fire." });
-  }
-  if (/when\s*\{\s*(true)\s*\}/.test(single)) {
-    findings.push({ kind: "unconditional", message: "The when clause is literally true; conditions are redundant." });
-  }
-
-  // Probe matrix: does this permit ever allow / does this forbid ever fire for the demo personas?
-  const probes = probeRequests();
-  let fired = 0;
-  for (const probe of probes) {
-    const r = cedar.isAuthorized({
-      ...probe.request,
-      policies: { staticPolicies: single },
-      entities: probe.entities,
-      schema: getCedarSchema(),
-    });
-    if (r.type !== "success") continue;
-    if (effect === "permit" && r.response.decision === "allow") fired += 1;
-    if (effect === "forbid" && r.response.diagnostics.reason.length > 0) fired += 1;
-  }
-  if (fired === 0) {
-    findings.push({
-      kind: "never-fires",
-      message: `This ${effect} did not fire for any of ${probes.length} representative requests across the demo personas and tools. It may be unreachable or depend on session history.`,
-    });
-  } else if (fired === probes.length) {
-    findings.push({
-      kind: effect === "permit" ? "always-permits" : "always-forbids",
-      message: `This ${effect} fired for all ${probes.length} representative requests.`,
-    });
-  } else {
-    findings.push({ kind: "info", message: `Fired for ${fired} of ${probes.length} representative requests.` });
-  }
+  if (/when\s*\{\s*false\s*\}/.test(policy)) findings.push({ kind: "never-fires", message: "The when clause is false." });
+  if (/when\s*\{\s*true\s*\}/.test(policy)) findings.push({ kind: "unconditional", message: "The when clause is true." });
   return findings;
-}
-
-function probeRequests() {
-  const personas: CedarPrincipal[] = [
-    { kind: "user", id: "maya@orderdesk.demo", tags: { role: "support", region: "us-west", scope: "orders:read" } },
-    { kind: "user", id: "dev@orderdesk.demo", tags: { role: "support-lead", region: "us-east", scope: "orders:read orders:write refunds:write" } },
-    { kind: "user", id: "priya@orderdesk.demo", tags: { role: "finance", region: "us-east", scope: "refunds:approve discounts:write" } },
-    { kind: "user", id: "sam@orderdesk.demo", tags: { role: "admin", region: "eu-west", scope: "orders:* refunds:* exports:*" } },
-    { kind: "user", id: "lena@contractor.example", tags: { role: "support", region: "eu-west", employment: "contractor", scope: "orders:read" } },
-    { kind: "service", id: "svc-nightly-reconciler", tags: { principal_kind: "service", scope: "orders:read exports:read" } },
-  ];
-  const inputs: Record<ToolName, Record<string, unknown>[]> = {
-    lookup_order: [{ orderId: "ORD-1001" }],
-    lookup_customer: [{ customerId: "CUST-1" }],
-    approve_refund: [{ orderId: "ORD-1001", amount: 800 }],
-    process_refund: [
-      { orderId: "ORD-1001", amount: 120, reason: "defective" },
-      { orderId: "ORD-1002", amount: 800, reason: "fraud" },
-    ],
-    cancel_order: [{ orderId: "ORD-1003", notifyCustomer: true }],
-    update_shipping_address: [
-      { orderId: "ORD-1003", country: "US", line1: "1 Main", city: "Austin", postalCode: "78701" },
-      { orderId: "ORD-1003", country: "DE", line1: "1 Str", city: "Berlin", postalCode: "10115" },
-    ],
-    apply_discount: [{ orderId: "ORD-1001", percent: 20 }, { orderId: "ORD-1001", percent: 60 }],
-    export_customer_data: [
-      { customerId: "CUST-1", format: "summary", includePii: false },
-      { customerId: "CUST-1", format: "full", includePii: true },
-    ],
-  };
-  const emptySession: SessionCedarContext = {
-    id: "probe",
-    turn: 1,
-    counts: Object.fromEntries(TOOL_NAMES.map((t) => [t, 0])) as Record<ToolName, number>,
-    prior: {},
-  };
-  const out: {
-    request: {
-      principal: { type: string; id: string };
-      action: { type: string; id: string };
-      resource: { type: string; id: string };
-      context: cedar.Context;
-    };
-    entities: cedar.Entities;
-  }[] = [];
-  for (const p of personas) {
-    for (const tool of TOOL_NAMES) {
-      for (const input of inputs[tool]) {
-        out.push({
-          request: {
-            principal: { type: p.kind === "user" ? ENTITY_TYPES.user : ENTITY_TYPES.service, id: p.id },
-            action: { type: ENTITY_TYPES.action, id: tool },
-            resource: AGENT_RESOURCE,
-            context: {
-              input: input as cedar.CedarValueJson,
-              system: { now: toCedarDatetime("2026-09-03T14:00:00Z") },
-              session: encodeSessionContext(emptySession) as cedar.CedarValueJson,
-            },
-          },
-          entities: buildEntities(p),
-        });
-      }
-    }
-  }
-  return out;
 }
 
 export function emptySessionContext(sessionId = "dry-run"): SessionCedarContext {
   return {
     id: sessionId,
-    turn: 1,
-    counts: Object.fromEntries(TOOL_NAMES.map((t) => [t, 0])) as Record<ToolName, number>,
+    turn: 0,
+    counts: Object.fromEntries(TOOL_NAMES.map((tool) => [tool, 0])) as Record<ToolName, number>,
     prior: {},
   };
 }
@@ -462,3 +334,5 @@ export function emptySessionContext(sessionId = "dry-run"): SessionCedarContext 
 export function cedarVersion(): string {
   return cedar.getCedarVersion();
 }
+
+export const AGENT_RESOURCE_STRING = `${AGENT_RESOURCE.type}::\"${AGENT_ID}\"`;
