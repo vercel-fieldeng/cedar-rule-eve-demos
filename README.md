@@ -87,6 +87,8 @@ The Cedar schema updates automatically from the catalog. Do not add authorizatio
 
 ## Validate
 
+The decision API reads at most the requested number of documents (maximum 500), with at most 16 downloads in flight. Use `beforeId=<oldest-id>` for an older page. Blob metadata listing still scans the selected session or all-session prefix; large retained histories would benefit from a separate index or retention policy.
+
 ```bash
 pnpm info
 pnpm typecheck

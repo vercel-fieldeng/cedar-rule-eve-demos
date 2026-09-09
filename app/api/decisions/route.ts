@@ -10,10 +10,12 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const sessionId = url.searchParams.get("sessionId") ?? undefined;
   const afterId = url.searchParams.get("afterId") ?? undefined;
+  const beforeId = url.searchParams.get("beforeId") ?? undefined;
   const parsedLimit = Number(url.searchParams.get("limit") ?? 100);
   const decisions = await listDecisions({
     sessionId,
     afterId,
+    beforeId,
     limit: Number.isFinite(parsedLimit) ? parsedLimit : 100,
   });
   return NextResponse.json({ decisions }, { headers: noStore });
