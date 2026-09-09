@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronRightIcon, PlusIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -218,6 +218,11 @@ export function PolicyEditor({
   initial?: { id: string; description: string; cedar: string };
 }) {
   const { data: policyConfig } = usePolicies();
+  // Keep the version that produced this draft, even if SWR refreshes the cache.
+  const [draftEtag, setDraftEtag] = useState(policyConfig?.etag);
+  useEffect(() => {
+    if (draftEtag === undefined && policyConfig) setDraftEtag(policyConfig.etag);
+  }, [draftEtag, policyConfig]);
   const [id, setId] = useState(policy?.id ?? initial?.id ?? "");
   const [description, setDescription] = useState(policy?.description ?? initial?.description ?? "");
   const [cedar, setCedar] = useState(policy?.cedar ?? initial?.cedar ?? TEMPLATE);
@@ -227,7 +232,7 @@ export function PolicyEditor({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
 
-  const canSave = id.trim().length > 0 && cedar.trim().length > 0 && status === "idle" && Boolean(policyConfig?.etag);
+  const canSave = id.trim().length > 0 && cedar.trim().length > 0 && status === "idle" && Boolean(draftEtag);
 
   async function runValidate() {
     setStatus("validating");
@@ -244,7 +249,7 @@ export function PolicyEditor({
   }
 
   async function runSave() {
-    if (!policyConfig?.etag) return;
+    if (!draftEtag) return;
     setStatus("saving");
     setError(null);
     try {
@@ -252,11 +257,12 @@ export function PolicyEditor({
         id: id.trim(),
         description: description.trim(),
         cedar,
-        expectedEtag: policyConfig.etag,
+        expectedEtag: draftEtag,
         origin: policy?.origin ?? (initial ? "ai" : "console"),
       });
       setValidation(out.validation);
       setAnalysis(out.analysis);
+      setDraftEtag(out.etag);
       onSaved(out.policy.id);
     } catch (e) {
       const err = e as Error & { data?: { validation?: ValidationReport } };
@@ -284,13 +290,13 @@ export function PolicyEditor({
               variant="ghost"
               size="icon-sm"
               aria-label="Delete policy"
-              disabled={status !== "idle" || !policyConfig?.etag}
+              disabled={status !== "idle" || !draftEtag}
               onClick={async () => {
-                if (!policyConfig?.etag) return;
+                if (!draftEtag) return;
                 setStatus("deleting");
                 setError(null);
                 try {
-                  await deletePolicy(policy.id, policyConfig.etag);
+                  await deletePolicy(policy.id, draftEtag);
                   onBack();
                 } catch (error) {
                   setError(error instanceof Error ? error.message : "Delete failed");
@@ -312,6 +318,20 @@ export function PolicyEditor({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        {draftEtag && policyConfig && draftEtag !== policyConfig.etag ? (
+          <div role="status" className="rounded border border-border p-3 text-sm">
+            Policies changed while this draft was open. Saving will require reloading the current version.
+            <Button variant="outline" size="sm" disabled={status !== "idle"} onClick={() => {
+              const current = policyConfig.policies.find((item) => item.id === id.trim());
+              setDescription(current?.description ?? "");
+              setCedar(current?.cedar ?? TEMPLATE);
+              setDraftEtag(policyConfig.etag);
+              setValidation(null);
+              setAnalysis(null);
+              setError(null);
+            }}>Discard draft and reload</Button>
+          </div>
+        ) : null}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_2fr]">
           <label className="flex flex-col gap-1">
             <Eyebrow>Policy id</Eyebrow>
