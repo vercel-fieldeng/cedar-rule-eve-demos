@@ -67,7 +67,7 @@ export function DecisionLog({
             onClick={async () => {
               setClearing(true);
               try {
-                await clearDecisions();
+                await clearDecisions(effectiveSession);
               } finally {
                 setClearing(false);
               }
@@ -119,6 +119,8 @@ function DecisionRow({ d }: { d: DecisionDto }) {
             <span className="truncate text-xs text-muted-foreground">{principal}</span>
           </div>
           <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+            <span className="font-mono uppercase">{d.outcome}</span>
+            <span className="font-mono">policy v{d.policyRevision}</span>
             {d.determiningPolicies.length > 0 ? (
               <span className="truncate font-mono">{d.determiningPolicies.join(", ")}</span>
             ) : (
@@ -137,6 +139,8 @@ function DecisionRow({ d }: { d: DecisionDto }) {
           <KV k="action" v={`Eve::Action::"${d.action}"`} />
           <KV k="resource" v={d.resource} />
           <KV k="mode" v={`${d.mode}${d.enforced ? "" : " (not enforced)"}`} />
+          <KV k="outcome" v={d.outcome} />
+          <KV k="policy" v={`revision ${d.policyRevision}`} />
           <KV k="latency" v={`${d.durationMs} ms`} />
           <div className="flex flex-col gap-1">
             <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">context.input</span>
@@ -144,6 +148,7 @@ function DecisionRow({ d }: { d: DecisionDto }) {
               {JSON.stringify(d.input, null, 2)}
             </pre>
           </div>
+          {d.executionError ? <KV k="execution" v={d.executionError} /> : null}
           {d.errors.length > 0 ? (
             <div className="flex flex-col gap-1">
               <span className="font-mono text-[10px] uppercase tracking-wider text-forbid">evaluation errors</span>

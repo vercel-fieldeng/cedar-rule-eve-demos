@@ -8,7 +8,10 @@
     "build": "next build",
     "start": "next start",
     "info": "eve info",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "smoke:cedar": "tsx scripts/cedar-smoke.ts",
+    "policies:sync": "tsx scripts/sync-default-policies.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -19,11 +22,11 @@
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
     "@vercel/analytics": "1.6.1",
+    "@vercel/blob": "^2.8.0",
     "ai": "^7.0.92",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "drizzle-orm": "^0.45.2",
     "eve": "^0.51.0",
     "gpu-lexer": "^0.0.2",
     "jose": "^6.2.10",
@@ -31,7 +34,6 @@
     "motion": "^13.2.0",
     "nanoid": "^6.0.1",
     "next": "16.3.3",
-    "pg": "^8.23.0",
     "radix-ui": "^1.6.7",
     "react": "^19",
     "react-dom": "^19",
@@ -47,12 +49,12 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24",
-    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "postcss": "^8.5",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.13",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.0"
   }
 }

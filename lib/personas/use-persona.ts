@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import useSWR from "swr";
 import { DEFAULT_PERSONA_ID, type Persona } from "./personas";
 
@@ -62,8 +62,11 @@ export function usePersona() {
     [setPersonaId],
   );
 
-  /** Function form so eve re-reads the latest token on every request. */
-  const bearer = useCallback(() => data?.token ?? "", [data?.token]);
+  const tokenRef = useRef(data?.token ?? "");
+  tokenRef.current = data?.token ?? "";
+
+  /** Stable function form so Eve re-reads the newest token before every request. */
+  const bearer = useCallback(() => tokenRef.current, []);
 
   return {
     personaId,

@@ -53,9 +53,10 @@ ${getCedarSchema()}
 - Current time is context.system.now (datetime). Use .toTime(), .toDate(), .durationSince(), duration("1h").
   There is no weekday accessor; express business hours with toTime() only.
 - Session history is in context.session:
-  - context.session.counts.<tool> (Long): how many times the tool ran this session.
+  - context.session.counts.<tool> (Long): successful plus in-flight calls, used for conservative limits.
   - context.session.prior has <tool> then context.session.prior.<tool>.{count, latest (datetime), orderIds (Set<String>), customerIds (Set<String>), amountTotal (Long)}.
-  Always guard prior with \`context.session.prior has <tool> &&\`.
+  - context.session.refundApproval is optional and contains { orderId, availableAmount, latest } for fresh, successful, unconsumed approval capacity on the current order.
+  Always guard optional fields with \`context.session has refundApproval &&\` or \`context.session.prior has <tool> &&\`.
 - Tags: use principal.hasTag("k") && principal.getTag("k") == "v". Multi-valued claims are space-joined strings; match with \`like "*value*"\`.
 - Money amounts are Long (whole units). No decimals in Cedar.
 - Prefer a forbid for guardrails ("never", "block", "must not") and a permit for grants.
@@ -109,7 +110,10 @@ export async function POST(request: Request) {
     const validation = validatePolicies(cedarText);
     if (validation.ok && validation.policyCount === 1) {
       const analysis = analyzePolicy(cedarText);
-      return NextResponse.json({ draft, validation, analysis, attempts: attempt, model: MODEL });
+      return NextResponse.json(
+        { draft, validation, analysis, attempts: attempt, model: MODEL },
+        { headers: { "Cache-Control": "no-store" } },
+      );
     }
     lastErrors = validation.issues.map((i) => i.message);
     if (validation.policyCount !== 1 && validation.ok) {

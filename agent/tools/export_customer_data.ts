@@ -7,7 +7,7 @@ export default guarded("export_customer_data", {
   inputSchema: TOOL_CATALOG.export_customer_data.inputSchema,
   execute({ customerId, format, includePii }) {
     const customer = demoStore.getCustomer(customerId);
-    if (!customer) return { ok: false, error: `Unknown customer ${customerId}` };
+    if (!customer) return { ok: false, error: `Unknown customer ${customerId}`, simulated: true };
 
     const orders = demoStore
       .listOrderIds()
@@ -24,12 +24,13 @@ export default guarded("export_customer_data", {
     };
 
     if (format === "summary") {
-      return { ok: true, format, includePii: false, export: summary };
+      return { ok: true, format, includePii: false, export: summary, simulated: true };
     }
     return {
       ok: true,
       format,
       includePii,
+      simulated: true,
       export: {
         ...summary,
         orders,

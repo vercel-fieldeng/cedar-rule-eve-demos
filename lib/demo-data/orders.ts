@@ -1,7 +1,7 @@
 /**
  * Deterministic demo fixtures for OrderDesk. The tools mutate a copy of these
- * per process; Cedar decisions (the thing being demonstrated) are persisted in
- * Neon, the order book is intentionally ephemeral.
+ * only for deterministic reads. Simulated mutations never change these records;
+ * Cedar authorization state and audit records live in private Vercel Blob.
  */
 export interface Customer {
   id: string;
@@ -122,8 +122,6 @@ const orders: Order[] = [
   },
 ];
 
-const approvals = new Map<string, { amount: number; note?: string; at: string }[]>();
-
 export const demoStore = {
   getOrder(id: string): Order | undefined {
     return orders.find((o) => o.id === id.toUpperCase());
@@ -134,13 +132,5 @@ export const demoStore = {
   listOrderIds(): string[] {
     return orders.map((o) => o.id);
   },
-  recordApproval(orderId: string, amount: number, note?: string) {
-    const list = approvals.get(orderId.toUpperCase()) ?? [];
-    list.push({ amount, note, at: new Date().toISOString() });
-    approvals.set(orderId.toUpperCase(), list);
-    return list;
-  },
-  approvalsFor(orderId: string) {
-    return approvals.get(orderId.toUpperCase()) ?? [];
-  },
+
 };

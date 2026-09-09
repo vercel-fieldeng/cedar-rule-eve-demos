@@ -25,16 +25,27 @@ import { cn } from "@/lib/utils";
 import { setEngineMode, useEngineMode } from "../_lib/api";
 import { ModePill } from "./primitives";
 
-export function ConsoleHeader({ onNewSession }: { onNewSession: () => void }) {
+export function ConsoleHeader({
+  onNewSession,
+  onSelectPersona,
+}: {
+  onNewSession: () => void;
+  onSelectPersona: (id: string) => void;
+}) {
   const identity = usePersona();
   const { data: engine } = useEngineMode();
   const [switching, setSwitching] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
   const mode = engine?.mode ?? "ENFORCE";
 
   async function toggleMode(checked: boolean) {
+    if (!engine?.etag) return;
     setSwitching(true);
+    setModeError(null);
     try {
-      await setEngineMode(checked ? "ENFORCE" : "LOG_ONLY");
+      await setEngineMode(checked ? "ENFORCE" : "LOG_ONLY", engine.etag);
+    } catch (error) {
+      setModeError(error instanceof Error ? error.message : "Mode update failed");
     } finally {
       setSwitching(false);
     }
@@ -76,21 +87,22 @@ export function ConsoleHeader({ onNewSession }: { onNewSession: () => void }) {
               Users (OAuth-style JWT)
             </DropdownMenuLabel>
             {users.map((p) => (
-              <PersonaItem key={p.id} p={p} active={p.id === identity.personaId} onSelect={identity.select} />
+              <PersonaItem key={p.id} p={p} active={p.id === identity.personaId} onSelect={onSelectPersona} />
             ))}
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
               Service principals
             </DropdownMenuLabel>
             {services.map((p) => (
-              <PersonaItem key={p.id} p={p} active={p.id === identity.personaId} onSelect={identity.select} />
+              <PersonaItem key={p.id} p={p} active={p.id === identity.personaId} onSelect={onSelectPersona} />
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
 
         {/* Engine mode */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" title={modeError ?? `Active policy revision ${engine?.revision ?? "loading"}`}>
           <ModePill mode={mode} className="hidden sm:inline-flex" />
+          {engine?.revision ? <span className="font-mono text-[10px] text-muted-foreground">v{engine.revision}</span> : null}
           <Switch
             checked={mode === "ENFORCE"}
             disabled={switching || !engine}

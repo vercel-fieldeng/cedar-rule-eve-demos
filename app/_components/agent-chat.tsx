@@ -48,12 +48,12 @@ interface AgentChatProps {
    * the persona token is available. Used by guided scenarios in the console.
    */
   readonly autoSend?: { key: number; text: string } | null;
+  readonly onAutoSendConsumed?: (key: number) => void;
 }
 
 /**
- * `useEveAgent` builds its client store once on mount and captures `auth` at
- * that moment, so the chat must not mount until the persona token is ready.
- * Keying on the token also guarantees a fresh store (and session) per persona.
+ * The chat waits for the first credential before mounting. Eve receives a
+ * stable bearer getter, so later token refreshes preserve the durable session.
  */
 export function AgentChat(props: AgentChatProps) {
   const identity = usePersona();
@@ -80,7 +80,7 @@ export function AgentChat(props: AgentChatProps) {
     );
   }
 
-  return <AgentChatInner key={identity.token} {...props} bearer={identity.token} />;
+  return <AgentChatInner {...props} bearer={identity.bearer} />;
 }
 
 function AgentChatInner({
@@ -90,8 +90,9 @@ function AgentChatInner({
   onSessionId,
   resetKey,
   autoSend,
+  onAutoSendConsumed,
   bearer,
-}: AgentChatProps & { readonly bearer: string }) {
+}: AgentChatProps & { readonly bearer: () => string }) {
   const [cancellationError, setCancellationError] = useState<string>();
   const [hasInputText, setHasInputText] = useState(false);
   const identity = usePersona();
@@ -139,6 +140,7 @@ function AgentChatInner({
     const { key, text } = autoSend;
     const timer = setTimeout(() => {
       sentAutoKey.current = key;
+      onAutoSendConsumed?.(key);
       agent.send(text).catch((error: unknown) => {
         console.error("[orderdesk] scenario send failed", error);
       });

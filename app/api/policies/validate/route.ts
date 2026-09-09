@@ -16,5 +16,5 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   const validation = validatePolicies(parsed.data.cedar);
   const analysis = validation.ok ? analyzePolicy(parsed.data.cedar) : [];
-  return NextResponse.json({ validation, analysis });
+  return NextResponse.json({ validation, analysis }, { headers: { "Cache-Control": "no-store" } });
 }

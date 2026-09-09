@@ -2,11 +2,7 @@
 
 import useSWR, { mutate as globalMutate } from "swr";
 import type { AnalysisFinding, AuthorizeResult, ValidationReport } from "@/lib/cedar/engine";
-import type { EngineMode } from "@/lib/db/schema";
-
-/* ------------------------------------------------------------------ */
-/* Types (serialized shapes of the API routes)                          */
-/* ------------------------------------------------------------------ */
+import type { DecisionOutcome, EngineMode } from "@/lib/cedar/documents";
 
 export interface PolicyDto {
   id: string;
@@ -18,9 +14,20 @@ export interface PolicyDto {
   updatedAt: string;
 }
 
+export interface PolicyConfigDto {
+  policies: PolicyDto[];
+  mode: EngineMode;
+  revision: number;
+  etag: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
 export interface DecisionDto {
-  id: number;
+  id: string;
+  operationId: string;
   createdAt: string;
+  updatedAt: string;
   sessionId: string;
   principalType: string;
   principalId: string;
@@ -31,9 +38,13 @@ export interface DecisionDto {
   decision: "ALLOW" | "DENY";
   mode: EngineMode;
   enforced: boolean;
+  policyRevision: number;
+  outcome: DecisionOutcome;
   determiningPolicies: string[];
   errors: string[];
   durationMs: number;
+  resultSummary?: unknown;
+  executionError?: string;
 }
 
 export type AnalysisReport = AnalysisFinding[];
@@ -43,28 +54,33 @@ export interface SchemaDto {
   tools: { name: string; description: string; mutating: boolean }[];
 }
 
-/* ------------------------------------------------------------------ */
-/* Fetching                                                             */
-/* ------------------------------------------------------------------ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly data: unknown,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 async function jsonFetcher<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`${url} failed: ${res.status}`);
-  return (await res.json()) as T;
+  const response = await fetch(url, { cache: "no-store" });
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  if (!response.ok) throw new ApiError(data.error ?? `${url} failed: ${response.status}`, response.status, data);
+  return data;
 }
 
 export async function postJson<T>(url: string, body: unknown, method = "POST"): Promise<T> {
-  const res = await fetch(url, {
+  const response = await fetch(url, {
     method,
+    cache: "no-store",
     headers: { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) {
-    const err = new Error(data.error ?? `${url} failed: ${res.status}`) as Error & { data?: unknown };
-    err.data = data;
-    throw err;
-  }
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  if (!response.ok) throw new ApiError(data.error ?? `${url} failed: ${response.status}`, response.status, data);
   return data;
 }
 
@@ -77,13 +93,11 @@ export const KEYS = {
 };
 
 export function usePolicies() {
-  return useSWR<{ policies: PolicyDto[]; mode: EngineMode }>(KEYS.policies, jsonFetcher, {
-    keepPreviousData: true,
-  });
+  return useSWR<PolicyConfigDto>(KEYS.policies, jsonFetcher, { keepPreviousData: true });
 }
 
 export function useEngineMode() {
-  return useSWR<{ mode: EngineMode; cedarVersion: string }>(KEYS.engine, jsonFetcher, {
+  return useSWR<{ mode: EngineMode; revision: number; etag: string; cedarVersion: string }>(KEYS.engine, jsonFetcher, {
     refreshInterval: 5000,
   });
 }
@@ -99,54 +113,71 @@ export function useDecisions(sessionId?: string, live = true) {
   });
 }
 
-/* ------------------------------------------------------------------ */
-/* Mutations                                                            */
-/* ------------------------------------------------------------------ */
+async function refreshConfig() {
+  await Promise.all([globalMutate(KEYS.policies), globalMutate(KEYS.engine)]);
+}
 
 export async function savePolicy(body: {
   id: string;
   description: string;
   cedar: string;
+  expectedEtag: string;
   enabled?: boolean;
   origin?: PolicyDto["origin"];
 }) {
-  const out = await postJson<{ policy: PolicyDto; validation: ValidationReport; analysis: AnalysisReport }>(
-    KEYS.policies,
-    body,
-  );
-  await globalMutate(KEYS.policies);
-  return out;
+  try {
+    return await postJson<{
+      policy: PolicyDto;
+      validation: ValidationReport;
+      analysis: AnalysisReport;
+      revision: number;
+      etag: string;
+    }>(KEYS.policies, body);
+  } finally {
+    await refreshConfig();
+  }
 }
 
-export async function togglePolicy(id: string, enabled: boolean) {
-  await postJson(`/api/policies/${encodeURIComponent(id)}`, { enabled }, "PATCH");
-  await globalMutate(KEYS.policies);
+export async function togglePolicy(id: string, enabled: boolean, expectedEtag: string) {
+  try {
+    return await postJson(`/api/policies/${encodeURIComponent(id)}`, { enabled, expectedEtag }, "PATCH");
+  } finally {
+    await refreshConfig();
+  }
 }
 
-export async function deletePolicy(id: string) {
-  await postJson(`/api/policies/${encodeURIComponent(id)}`, undefined, "DELETE");
-  await globalMutate(KEYS.policies);
+export async function deletePolicy(id: string, expectedEtag: string) {
+  try {
+    return await postJson(`/api/policies/${encodeURIComponent(id)}`, { expectedEtag }, "DELETE");
+  } finally {
+    await refreshConfig();
+  }
 }
 
-export async function resetPolicies() {
-  await postJson(KEYS.policies, undefined, "DELETE");
-  await globalMutate(KEYS.policies);
+export async function resetPolicies(expectedEtag: string) {
+  try {
+    return await postJson(KEYS.policies, { expectedEtag }, "DELETE");
+  } finally {
+    await refreshConfig();
+  }
 }
 
-export async function setEngineMode(mode: EngineMode) {
-  await postJson(KEYS.engine, { mode }, "PUT");
-  await Promise.all([globalMutate(KEYS.engine), globalMutate(KEYS.policies)]);
+export async function setEngineMode(mode: EngineMode, expectedEtag: string) {
+  try {
+    return await postJson(KEYS.engine, { mode, expectedEtag }, "PUT");
+  } finally {
+    await refreshConfig();
+  }
 }
 
-export async function clearDecisions() {
-  await postJson("/api/decisions", undefined, "DELETE");
+export async function clearDecisions(sessionId?: string) {
+  const url = sessionId ? `/api/decisions?sessionId=${encodeURIComponent(sessionId)}` : "/api/decisions";
+  await postJson(url, undefined, "DELETE");
   await globalMutate((key) => typeof key === "string" && key.startsWith("/api/decisions"));
 }
 
 export function validateCedar(cedar: string) {
-  return postJson<{ validation: ValidationReport; analysis?: AnalysisReport }>("/api/policies/validate", {
-    cedar,
-  });
+  return postJson<{ validation: ValidationReport; analysis?: AnalysisReport }>("/api/policies/validate", { cedar });
 }
 
 export interface DryRunBody {
@@ -156,17 +187,15 @@ export interface DryRunBody {
   now?: string;
   session?: {
     counts: Record<string, number>;
-    prior: Record<
-      string,
-      { count: number; latest: string; orderIds: string[]; customerIds: string[]; amountTotal: number }
-    >;
+    prior: Record<string, { count: number; latest: string; orderIds: string[]; customerIds: string[]; amountTotal: number }>;
+    refundApproval?: { orderId: string; availableAmount: number; latest: string };
   };
   draft?: { id: string; cedar: string };
   includeStored?: boolean;
 }
 
 export function dryRun(body: DryRunBody) {
-  return postJson<{ result: AuthorizeResult; policyIds: string[]; draftValidation?: ValidationReport }>(
+  return postJson<{ result: AuthorizeResult; policyIds: string[]; draftValidation?: ValidationReport; testedRevision: number }>(
     "/api/policies/test",
     body,
   );

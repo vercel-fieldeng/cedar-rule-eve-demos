@@ -23,7 +23,6 @@ export default guarded("lookup_order", {
         items: order.items,
         shipping: order.shipping,
         placedAt: order.placedAt,
-        approvals: demoStore.approvalsFor(order.id),
       },
     };
   },

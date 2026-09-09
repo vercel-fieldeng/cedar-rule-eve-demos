@@ -2,13 +2,10 @@ import type { NextConfig } from "next";
 import { withEve } from "eve/next";
 
 const nextConfig: NextConfig = {
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   images: {
     unoptimized: true,
   },
-  serverExternalPackages: ["@cedar-policy/cedar-wasm", "pg"],
+  serverExternalPackages: ["@cedar-policy/cedar-wasm"],
   async headers() {
     return [
       {

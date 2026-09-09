@@ -1,198 +1,334 @@
-import { and, desc, eq, sql } from "drizzle-orm";
-import { db } from "../db";
+import { randomUUID } from "node:crypto";
+import type { JsonObjectStore, StoredJson } from "./blob-storage";
+import { blobObjectStore, StorageConflictError } from "./blob-storage";
 import {
-  cedarDecisions,
-  cedarEngine,
-  cedarPolicies,
-  type CedarDecisionRow,
-  type CedarPolicyRow,
+  authorizationSessionDocumentSchema,
+  decisionRecordSchema,
+  emptyAuthorizationSession,
+  policyConfigDocumentSchema,
+  type AuthorizationSessionDocument,
+  type DecisionRecord,
   type EngineMode,
-} from "../db/schema";
+  type PolicyConfigDocument,
+  type PolicyOrigin,
+  type PolicyRecord,
+} from "./documents";
+import { validatePolicies } from "./engine";
 import { SEED_POLICIES } from "./seed-policies";
 
-/* ------------------------------------------------------------------ */
-/* Policies                                                             */
-/* ------------------------------------------------------------------ */
+export const STORAGE_PATHS = {
+  policyConfig: "orderdesk/v1/config/policies.json",
+  authorizationSessions: "orderdesk/v1/authorization-sessions/",
+  decisions: "orderdesk/v1/decisions/",
+} as const;
 
-let seeded = false;
-
-/** Idempotently loads the seed policies on first use so the demo works cold. */
-export async function ensureSeeded(): Promise<void> {
-  if (seeded) return;
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(cedarPolicies);
-  if (count === 0) {
-    await db.insert(cedarPolicies).values(
-      SEED_POLICIES.map((p) => ({
-        id: p.id,
-        description: p.description,
-        cedar: p.cedar,
-        enabled: p.enabled ?? true,
-        origin: "seed",
-      })),
-    );
+export class StalePolicyConfigError extends StorageConflictError {
+  constructor() {
+    super("Policy configuration changed in another session. Reload and apply your change again.");
+    this.name = "StalePolicyConfigError";
   }
-  seeded = true;
 }
 
-export async function listPolicies(): Promise<CedarPolicyRow[]> {
-  await ensureSeeded();
-  return db.select().from(cedarPolicies).orderBy(cedarPolicies.createdAt, cedarPolicies.id);
+export interface PolicyConfigSnapshot {
+  config: PolicyConfigDocument;
+  etag: string;
 }
 
-/**
- * Enabled policies as an id-keyed record. Cedar uses the record keys as policy
- * ids in its diagnostics, so decisions cite `refund-under-500-for-leads`
- * instead of `policy3`.
- */
-export async function getEnabledPolicySet(): Promise<Record<string, string>> {
-  const rows = await listPolicies();
-  const set: Record<string, string> = {};
-  for (const r of rows) if (r.enabled) set[r.id] = r.cedar;
-  return set;
+export interface SessionSnapshot {
+  state: AuthorizationSessionDocument;
+  etag: string | null;
 }
 
-export async function upsertPolicy(input: {
-  id: string;
-  description: string;
-  cedar: string;
-  enabled?: boolean;
-  origin?: string;
-}): Promise<CedarPolicyRow> {
-  await ensureSeeded();
-  const [row] = await db
-    .insert(cedarPolicies)
-    .values({
-      id: input.id,
-      description: input.description,
-      cedar: input.cedar,
-      enabled: input.enabled ?? true,
-      origin: input.origin ?? "console",
-    })
-    .onConflictDoUpdate({
-      target: cedarPolicies.id,
-      set: {
+function nowIso(clock: () => Date): string {
+  return clock().toISOString();
+}
+
+function sessionPath(sessionId: string): string {
+  return `${STORAGE_PATHS.authorizationSessions}${encodeURIComponent(sessionId)}.json`;
+}
+
+function decisionPrefix(sessionId?: string): string {
+  return sessionId
+    ? `${STORAGE_PATHS.decisions}${encodeURIComponent(sessionId)}/`
+    : STORAGE_PATHS.decisions;
+}
+
+function decisionPath(sessionId: string, id: string): string {
+  return `${decisionPrefix(sessionId)}${id}.json`;
+}
+
+function parseDocument<T>(pathname: string, schema: { parse(value: unknown): T }, value: unknown): T {
+  try {
+    return schema.parse(value);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Malformed private Blob document at ${pathname}: ${detail}`);
+  }
+}
+
+export class CedarRepository {
+  constructor(
+    readonly objects: JsonObjectStore = blobObjectStore,
+    readonly clock: () => Date = () => new Date(),
+  ) {}
+
+  private defaultConfig(): PolicyConfigDocument {
+    const timestamp = nowIso(this.clock);
+    return {
+      schemaVersion: 1,
+      revision: 1,
+      updatedAt: timestamp,
+      updatedBy: "repository-defaults",
+      mode: "ENFORCE",
+      policies: SEED_POLICIES.map((policy) => ({
+        ...policy,
+        origin: "seed" as const,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })),
+    };
+  }
+
+  async getPolicyConfig(): Promise<PolicyConfigSnapshot> {
+    const stored = await this.objects.read<unknown>(STORAGE_PATHS.policyConfig);
+    if (stored) {
+      return {
+        config: parseDocument(stored.pathname, policyConfigDocumentSchema, stored.value),
+        etag: stored.etag,
+      };
+    }
+
+    const initial = this.defaultConfig();
+    this.validateConfig(initial);
+    try {
+      const created = await this.objects.create(STORAGE_PATHS.policyConfig, initial);
+      return { config: initial, etag: created.etag };
+    } catch (error) {
+      if (!(error instanceof StorageConflictError)) throw error;
+      const winner = await this.objects.read<unknown>(STORAGE_PATHS.policyConfig);
+      if (!winner) throw new Error("Policy configuration initialization raced but no winning document was found.");
+      return {
+        config: parseDocument(winner.pathname, policyConfigDocumentSchema, winner.value),
+        etag: winner.etag,
+      };
+    }
+  }
+
+  private validateConfig(config: PolicyConfigDocument): void {
+    policyConfigDocumentSchema.parse(config);
+    const report = validatePolicies(Object.fromEntries(config.policies.map((policy) => [policy.id, policy.cedar])));
+    if (!report.ok) {
+      throw new Error(`Policy configuration failed Cedar validation: ${report.issues.map((issue) => issue.message).join("; ")}`);
+    }
+  }
+
+  async replacePolicyConfig(
+    expectedEtag: string,
+    updatedBy: string,
+    transform: (current: PolicyConfigDocument) => PolicyConfigDocument,
+  ): Promise<PolicyConfigSnapshot> {
+    const current = await this.getPolicyConfig();
+    if (current.etag !== expectedEtag) throw new StalePolicyConfigError();
+    const timestamp = nowIso(this.clock);
+    const next = transform(structuredClone(current.config));
+    const activated: PolicyConfigDocument = {
+      ...next,
+      schemaVersion: 1,
+      revision: current.config.revision + 1,
+      updatedAt: timestamp,
+      updatedBy,
+    };
+    this.validateConfig(activated);
+    try {
+      const stored = await this.objects.write(STORAGE_PATHS.policyConfig, activated, expectedEtag);
+      return { config: activated, etag: stored.etag };
+    } catch (error) {
+      if (error instanceof StorageConflictError) throw new StalePolicyConfigError();
+      throw error;
+    }
+  }
+
+  async upsertPolicy(
+    input: { id: string; description: string; cedar: string; enabled?: boolean; origin?: PolicyOrigin },
+    expectedEtag: string,
+  ): Promise<{ policy: PolicyRecord; snapshot: PolicyConfigSnapshot }> {
+    let savedPolicy: PolicyRecord | undefined;
+    const snapshot = await this.replacePolicyConfig(expectedEtag, "console", (config) => {
+      const timestamp = nowIso(this.clock);
+      const existing = config.policies.find((policy) => policy.id === input.id);
+      savedPolicy = {
+        id: input.id,
         description: input.description,
         cedar: input.cedar,
-        enabled: input.enabled ?? true,
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
-  return row;
-}
-
-export async function setPolicyEnabled(id: string, enabled: boolean): Promise<void> {
-  await db
-    .update(cedarPolicies)
-    .set({ enabled, updatedAt: new Date() })
-    .where(eq(cedarPolicies.id, id));
-}
-
-export async function deletePolicy(id: string): Promise<void> {
-  await db.delete(cedarPolicies).where(eq(cedarPolicies.id, id));
-}
-
-/** Restores the seed set: deletes everything and re-inserts the seeds. */
-export async function resetPolicies(): Promise<void> {
-  await db.delete(cedarPolicies);
-  seeded = false;
-  await ensureSeeded();
-}
-
-/* ------------------------------------------------------------------ */
-/* Engine mode                                                          */
-/* ------------------------------------------------------------------ */
-
-export async function getEngineMode(): Promise<EngineMode> {
-  const [row] = await db.select().from(cedarEngine).where(eq(cedarEngine.id, "default"));
-  if (!row) {
-    await db.insert(cedarEngine).values({ id: "default", mode: "ENFORCE" }).onConflictDoNothing();
-    return "ENFORCE";
+        enabled: input.enabled ?? existing?.enabled ?? true,
+        origin: input.origin ?? existing?.origin ?? "console",
+        createdAt: existing?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+      return {
+        ...config,
+        policies: [...config.policies.filter((policy) => policy.id !== input.id), savedPolicy].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        ),
+      };
+    });
+    if (!savedPolicy) throw new Error("Policy update did not produce a record.");
+    return { policy: savedPolicy, snapshot };
   }
-  return row.mode === "LOG_ONLY" ? "LOG_ONLY" : "ENFORCE";
+
+  async setPolicyEnabled(id: string, enabled: boolean, expectedEtag: string): Promise<PolicyConfigSnapshot> {
+    return this.replacePolicyConfig(expectedEtag, "console", (config) => {
+      const timestamp = nowIso(this.clock);
+      let found = false;
+      const policies = config.policies.map((policy) => {
+        if (policy.id !== id) return policy;
+        found = true;
+        return { ...policy, enabled, updatedAt: timestamp };
+      });
+      if (!found) throw new Error(`Unknown policy ${id}`);
+      return { ...config, policies };
+    });
+  }
+
+  async deletePolicy(id: string, expectedEtag: string): Promise<PolicyConfigSnapshot> {
+    return this.replacePolicyConfig(expectedEtag, "console", (config) => {
+      if (!config.policies.some((policy) => policy.id === id)) throw new Error(`Unknown policy ${id}`);
+      return { ...config, policies: config.policies.filter((policy) => policy.id !== id) };
+    });
+  }
+
+  async resetPolicies(expectedEtag: string): Promise<PolicyConfigSnapshot> {
+    return this.replacePolicyConfig(expectedEtag, "console-reset", (config) => ({
+      ...this.defaultConfig(),
+      mode: config.mode,
+    }));
+  }
+
+  async setEngineMode(mode: EngineMode, expectedEtag: string): Promise<PolicyConfigSnapshot> {
+    return this.replacePolicyConfig(expectedEtag, "console", (config) => ({ ...config, mode }));
+  }
+
+  async getSession(sessionId: string): Promise<SessionSnapshot> {
+    const pathname = sessionPath(sessionId);
+    const stored = await this.objects.read<unknown>(pathname);
+    if (!stored) return { state: emptyAuthorizationSession(sessionId, nowIso(this.clock)), etag: null };
+    const state = parseDocument(stored.pathname, authorizationSessionDocumentSchema, stored.value);
+    if (state.sessionId !== sessionId) throw new Error(`Authorization session path mismatch for ${sessionId}`);
+    return { state, etag: stored.etag };
+  }
+
+  async saveSession(state: AuthorizationSessionDocument, expectedEtag: string | null): Promise<SessionSnapshot> {
+    const updated: AuthorizationSessionDocument = {
+      ...state,
+      revision: state.revision + 1,
+      updatedAt: nowIso(this.clock),
+    };
+    authorizationSessionDocumentSchema.parse(updated);
+    const pathname = sessionPath(state.sessionId);
+    const stored = expectedEtag
+      ? await this.objects.write(pathname, updated, expectedEtag)
+      : await this.objects.create(pathname, updated);
+    return { state: updated, etag: stored.etag };
+  }
+
+  async createDecision(input: Omit<DecisionRecord, "schemaVersion" | "id" | "createdAt" | "updatedAt">) {
+    const timestamp = nowIso(this.clock);
+    const id = `${String(this.clock().getTime()).padStart(13, "0")}-${randomUUID()}`;
+    const decision: DecisionRecord = {
+      ...input,
+      schemaVersion: 1,
+      id,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    decisionRecordSchema.parse(decision);
+    const stored = await this.objects.create(decisionPath(decision.sessionId, id), decision);
+    return { decision, etag: stored.etag, pathname: stored.pathname };
+  }
+
+  async updateDecision(
+    pathname: string,
+    etag: string,
+    decision: DecisionRecord,
+    patch: Partial<Pick<DecisionRecord, "outcome" | "resultSummary" | "executionError">>,
+  ) {
+    const updated: DecisionRecord = { ...decision, ...patch, updatedAt: nowIso(this.clock) };
+    decisionRecordSchema.parse(updated);
+    const stored = await this.objects.write(pathname, updated, etag);
+    return { decision: updated, etag: stored.etag, pathname: stored.pathname };
+  }
+
+  async listDecisions(options: { sessionId?: string; afterId?: string; limit?: number } = {}) {
+    const metadata = await this.objects.list(decisionPrefix(options.sessionId));
+    const records = await Promise.all(
+      metadata.map(async (item) => {
+        const stored = await this.objects.read<unknown>(item.pathname);
+        if (!stored) return null;
+        return parseDocument(stored.pathname, decisionRecordSchema, stored.value);
+      }),
+    );
+    return records
+      .filter((record): record is DecisionRecord => Boolean(record))
+      .filter((record) => !options.afterId || record.id > options.afterId)
+      .sort((a, b) => b.id.localeCompare(a.id))
+      .slice(0, Math.min(Math.max(options.limit ?? 100, 1), 500));
+  }
+
+  async clearDecisions(sessionId?: string): Promise<number> {
+    const objects = await this.objects.list(decisionPrefix(sessionId));
+    await this.objects.delete(objects.map((object) => object.pathname));
+    return objects.length;
+  }
 }
 
-export async function setEngineMode(mode: EngineMode): Promise<void> {
-  await db
-    .insert(cedarEngine)
-    .values({ id: "default", mode })
-    .onConflictDoUpdate({ target: cedarEngine.id, set: { mode, updatedAt: new Date() } });
+export const cedarRepository = new CedarRepository();
+
+export async function getPolicyConfig() {
+  return cedarRepository.getPolicyConfig();
 }
 
-/* ------------------------------------------------------------------ */
-/* Decisions                                                            */
-/* ------------------------------------------------------------------ */
-
-export interface DecisionRecord {
-  sessionId: string;
-  principalType: string;
-  principalId: string;
-  action: string;
-  resource: string;
-  input: unknown;
-  context: unknown;
-  decision: "ALLOW" | "DENY";
-  mode: EngineMode;
-  enforced: boolean;
-  determiningPolicies: string[];
-  errors: string[];
-  durationMs: number;
+export async function listPolicies() {
+  const snapshot = await cedarRepository.getPolicyConfig();
+  return { ...snapshot, policies: snapshot.config.policies, mode: snapshot.config.mode, revision: snapshot.config.revision };
 }
 
-export async function recordDecision(rec: DecisionRecord): Promise<number> {
-  const [row] = await db
-    .insert(cedarDecisions)
-    .values({
-      sessionId: rec.sessionId,
-      principalType: rec.principalType,
-      principalId: rec.principalId,
-      action: rec.action,
-      resource: rec.resource,
-      input: rec.input ?? {},
-      context: rec.context ?? {},
-      decision: rec.decision,
-      mode: rec.mode,
-      enforced: rec.enforced,
-      determiningPolicies: rec.determiningPolicies,
-      errors: rec.errors,
-      durationMs: Math.max(0, Math.round(rec.durationMs)),
-    })
-    .returning({ id: cedarDecisions.id });
-  return row.id;
+export async function getEnabledPolicySet() {
+  const snapshot = await cedarRepository.getPolicyConfig();
+  return {
+    policies: Object.fromEntries(
+      snapshot.config.policies.filter((policy) => policy.enabled).map((policy) => [policy.id, policy.cedar]),
+    ),
+    mode: snapshot.config.mode,
+    revision: snapshot.config.revision,
+    etag: snapshot.etag,
+  };
 }
 
-export async function listDecisions(opts: {
-  limit?: number;
-  sessionId?: string;
-  afterId?: number;
-}): Promise<CedarDecisionRow[]> {
-  const limit = Math.min(opts.limit ?? 100, 500);
-  const conds = [];
-  if (opts.sessionId) conds.push(eq(cedarDecisions.sessionId, opts.sessionId));
-  if (opts.afterId !== undefined) conds.push(sql`${cedarDecisions.id} > ${opts.afterId}`);
-  return db
-    .select()
-    .from(cedarDecisions)
-    .where(conds.length ? and(...conds) : undefined)
-    .orderBy(desc(cedarDecisions.id))
-    .limit(limit);
+export async function upsertPolicy(input: Parameters<CedarRepository["upsertPolicy"]>[0], expectedEtag: string) {
+  return cedarRepository.upsertPolicy(input, expectedEtag);
+}
+export async function setPolicyEnabled(id: string, enabled: boolean, expectedEtag: string) {
+  return cedarRepository.setPolicyEnabled(id, enabled, expectedEtag);
+}
+export async function deletePolicy(id: string, expectedEtag: string) {
+  return cedarRepository.deletePolicy(id, expectedEtag);
+}
+export async function resetPolicies(expectedEtag: string) {
+  return cedarRepository.resetPolicies(expectedEtag);
+}
+export async function getEngineMode() {
+  const snapshot = await cedarRepository.getPolicyConfig();
+  return { mode: snapshot.config.mode, revision: snapshot.config.revision, etag: snapshot.etag };
+}
+export async function setEngineMode(mode: EngineMode, expectedEtag: string) {
+  return cedarRepository.setEngineMode(mode, expectedEtag);
+}
+export async function listDecisions(options: Parameters<CedarRepository["listDecisions"]>[0]) {
+  return cedarRepository.listDecisions(options);
+}
+export async function clearDecisions(sessionId?: string) {
+  return cedarRepository.clearDecisions(sessionId);
 }
 
-export async function clearDecisions(): Promise<void> {
-  await db.delete(cedarDecisions);
-}
-
-/**
- * Prior *executed* actions in this session. Only decisions that actually ran
- * the tool count (ALLOW in either mode, or DENY that was not enforced in
- * LOG_ONLY). This is the substrate for temporal policies.
- */
-export async function listExecutedActionsForSession(sessionId: string): Promise<CedarDecisionRow[]> {
-  return db
-    .select()
-    .from(cedarDecisions)
-    .where(and(eq(cedarDecisions.sessionId, sessionId), eq(cedarDecisions.enforced, false)))
-    .orderBy(cedarDecisions.id);
-}
+export type { DecisionRecord, EngineMode, PolicyRecord } from "./documents";
+export type { StoredJson };
