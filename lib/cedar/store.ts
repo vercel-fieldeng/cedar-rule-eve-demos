@@ -276,8 +276,18 @@ export class CedarRepository {
 
   async clearDecisions(sessionId?: string): Promise<number> {
     const objects = await this.objects.list(decisionPrefix(sessionId));
-    await this.objects.delete(objects.map((object) => object.pathname));
-    return objects.length;
+    let cleared = 0;
+    // Pending records are still owned by the operation runner. Deleting one
+    // would make its final conditional write fail after execution succeeded.
+    for (const object of objects) {
+      const stored = await this.objects.read<unknown>(object.pathname);
+      if (!stored) continue;
+      const decision = parseDocument(stored.pathname, decisionRecordSchema, stored.value);
+      if (decision.outcome === "pending") continue;
+      await this.objects.delete([object.pathname]);
+      cleared += 1;
+    }
+    return cleared;
   }
 }
 

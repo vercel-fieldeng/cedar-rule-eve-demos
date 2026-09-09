@@ -112,4 +112,6 @@ These are teaching surfaces, not production authentication or authorization. Bef
 
 ## Default policy behavior
 
+Clearing the audit log preserves pending records until execution finishes. They remain visible and can be cleared afterward, allowing the runner to record the final outcome safely.
+
 The checked-in policy set demonstrates Cedar default deny, permit/forbid precedence, input constraints, service principals, business-hour and region toggles, sequencing, same-order approval, one-hour approval expiry, consumed approval capacity, three-refund session count limits, and a 2000 session refund budget. All business mutations remain explicitly simulated and keep fixtures pristine for repeatable demos.
