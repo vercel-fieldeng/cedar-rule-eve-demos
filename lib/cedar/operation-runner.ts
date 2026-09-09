@@ -5,7 +5,6 @@ import {
   AGENT_RESOURCE_STRING,
   buildSessionContext,
   evaluate,
-  pruneExpiredReservations,
   type AuthorizeResult,
   type CedarPrincipal,
 } from "./engine";
@@ -88,7 +87,7 @@ export class AuthorizationOperationRunner {
         this.repository.getPolicyConfig(),
         this.repository.getSession(request.sessionId),
       ]);
-      const state = pruneExpiredReservations(sessionSnapshot.state, now);
+      const state = sessionSnapshot.state;
       const session = buildSessionContext(state, now, request.turn, request.input);
       const policies = Object.fromEntries(
         policySnapshot.config.policies
