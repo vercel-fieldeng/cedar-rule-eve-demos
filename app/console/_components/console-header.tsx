@@ -1,6 +1,12 @@
 "use client";
 
-import { ChevronDownIcon, MessageSquarePlusIcon, ShieldCheckIcon, UserIcon, ServerIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  MessageSquarePlusIcon,
+  ServerIcon,
+  ShieldCheckIcon,
+  UserIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -97,6 +103,7 @@ export function ConsoleHeader({ onNewSession }: { onNewSession: () => void }) {
           <MessageSquarePlusIcon className="size-4" />
           <span className="hidden sm:inline">New session</span>
         </Button>
+
       </div>
     </header>
   );
