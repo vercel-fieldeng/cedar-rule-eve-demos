@@ -258,20 +258,27 @@ export class CedarRepository {
     return { decision: updated, etag: stored.etag, pathname: stored.pathname };
   }
 
-  async listDecisions(options: { sessionId?: string; afterId?: string; limit?: number } = {}) {
+  async listDecisions(options: { sessionId?: string; afterId?: string; beforeId?: string; limit?: number } = {}) {
     const metadata = await this.objects.list(decisionPrefix(options.sessionId));
-    const records = await Promise.all(
-      metadata.map(async (item) => {
+    const limit = Number.isFinite(options.limit) ? Math.min(Math.max(Math.trunc(options.limit!), 1), 500) : 100;
+    const idOf = (pathname: string) => pathname.slice(pathname.lastIndexOf("/") + 1, -5);
+    const page = metadata
+      .filter((item) => (!options.afterId || idOf(item.pathname) > options.afterId) &&
+        (!options.beforeId || idOf(item.pathname) < options.beforeId))
+      .sort((a, b) => idOf(b.pathname).localeCompare(idOf(a.pathname)))
+      .slice(0, limit);
+    const records: DecisionRecord[] = [];
+    // Metadata listing remains paginated by the adapter. Download only this
+    // page, with bounded concurrency even when the caller requests 500 rows.
+    for (let offset = 0; offset < page.length; offset += 16) {
+      const batch = await Promise.all(page.slice(offset, offset + 16).map(async (item) => {
         const stored = await this.objects.read<unknown>(item.pathname);
         if (!stored) return null;
         return parseDocument(stored.pathname, decisionRecordSchema, stored.value);
-      }),
-    );
-    return records
-      .filter((record): record is DecisionRecord => Boolean(record))
-      .filter((record) => !options.afterId || record.id > options.afterId)
-      .sort((a, b) => b.id.localeCompare(a.id))
-      .slice(0, Math.min(Math.max(options.limit ?? 100, 1), 500));
+      }));
+      records.push(...batch.filter((record): record is DecisionRecord => record !== null));
+    }
+    return records;
   }
 
   async clearDecisions(sessionId?: string): Promise<number> {
