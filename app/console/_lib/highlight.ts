@@ -1,62 +1,65 @@
-import { createHighlighterCore } from "shiki/core";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import type { LanguageRegistration, ThemeRegistration } from "shiki";
+import { parse } from "gpu-lexer";
 
 export type CodeLanguage = "cedar" | "typescript" | "text";
 
-const cedar: LanguageRegistration = {
-  name: "cedar",
-  scopeName: "source.cedar",
-  patterns: [
-    { name: "comment.line.double-slash.cedar", match: "//.*$" },
-    { name: "comment.block.cedar", begin: "/\\*", end: "\\*/" },
-    {
-      name: "string.quoted.double.cedar",
-      begin: '"',
-      end: '"',
-      patterns: [{ name: "constant.character.escape.cedar", match: "\\\\." }],
-    },
-    { name: "entity.name.function.annotation.cedar", match: "@[a-zA-Z_][\\w]*" },
-    { name: "keyword.control.permit.cedar", match: "\\bpermit\\b" },
-    { name: "keyword.control.forbid.cedar", match: "\\bforbid\\b" },
-    {
-      name: "keyword.control.cedar",
-      match: "\\b(when|unless|in|has|like|is|if|then|else|namespace|entity|action|appliesTo|tags|type)\\b",
-    },
-    { name: "variable.language.cedar", match: "\\b(principal|resource|context)\\b" },
-    { name: "constant.language.cedar", match: "\\b(true|false)\\b" },
-    { name: "constant.numeric.cedar", match: "\\b[0-9]+\\b" },
-    { name: "entity.name.type.cedar", match: "\\b[A-Z][\\w]*(?:::[A-Z][\\w]*)*\\b" },
-    { name: "entity.name.function.cedar", match: "\\b[a-zA-Z_][\\w]*(?=\\s*\\()" },
-    { name: "keyword.operator.cedar", match: "&&|\\|\\||==|!=|<=|>=|[!<>+*=-]" },
-  ],
+type SyntaxType =
+  | "plain"
+  | "comment"
+  | "string"
+  | "number"
+  | "keyword"
+  | "type"
+  | "function"
+  | "constant"
+  | "operator";
+
+export interface HighlightToken {
+  content: string;
+  color?: string;
+  fontStyle?: number;
+}
+
+const TOKEN_COLORS: Record<SyntaxType, string | undefined> = {
+  plain: undefined,
+  comment: "var(--muted-foreground)",
+  string: "var(--code-string)",
+  number: "var(--code-number)",
+  keyword: "var(--code-keyword)",
+  type: "var(--code-type)",
+  function: "var(--code-function)",
+  constant: "var(--code-constant)",
+  operator: "var(--code-operator)",
 };
 
-const theme: ThemeRegistration = {
-  name: "orderdesk",
-  type: "light",
-  colors: { "editor.foreground": "var(--foreground)", "editor.background": "var(--code)" },
-  tokenColors: [
-    { scope: "comment", settings: { foreground: "var(--muted-foreground)", fontStyle: "italic" } },
-    { scope: ["keyword", "storage", "variable.language"], settings: { foreground: "var(--code-keyword)" } },
-    { scope: ["string", "constant.character"], settings: { foreground: "var(--code-string)" } },
-    { scope: ["constant.numeric", "constant.language"], settings: { foreground: "var(--code-keyword)" } },
-    { scope: ["entity.name.function", "support.function", "entity.name.type", "support.type"], settings: { foreground: "var(--code-type)" } },
-    { scope: "keyword.control.permit.cedar", settings: { foreground: "var(--permit)", fontStyle: "bold" } },
-    { scope: "keyword.control.forbid.cedar", settings: { foreground: "var(--forbid)", fontStyle: "bold" } },
-  ],
-};
+function token(content: string, type: SyntaxType = "plain"): HighlightToken {
+  return {
+    content,
+    color: TOKEN_COLORS[type],
+    fontStyle: type === "comment" ? 1 : undefined,
+  };
+}
 
-let highlighter: ReturnType<typeof createHighlighterCore> | undefined;
+export async function highlightCode(code: string, _language: CodeLanguage) {
+  const spans = await parse(code);
+  const tokens: HighlightToken[] = [];
+  let cursor = 0;
 
-export async function highlightCode(code: string, language: CodeLanguage) {
-  highlighter ??= createHighlighterCore({
-    themes: [theme],
-    langs: [cedar, import("shiki/langs/typescript.mjs")],
-    engine: createJavaScriptRegexEngine(),
-  }).catch((error: unknown) => {
-    highlighter = undefined;
-    throw error;
-  });
-  return (await highlighter).codeToTokens(code, { lang: language, theme: "orderdesk" }).tokens;
+  for (const span of spans) {
+    if (span.start > cursor) tokens.push(token(code.slice(cursor, span.start)));
+    tokens.push(token(code.slice(span.start, span.end), span.type));
+    cursor = span.end;
+  }
+
+  if (cursor < code.length) tokens.push(token(code.slice(cursor)));
+
+  const lines: HighlightToken[][] = [[]];
+  for (const item of tokens) {
+    const parts = item.content.split("\n");
+    parts.forEach((part, index) => {
+      if (index > 0) lines.push([]);
+      if (part) lines.at(-1)?.push({ ...item, content: part });
+    });
+  }
+
+  return lines;
 }

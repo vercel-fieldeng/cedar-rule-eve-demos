@@ -82,7 +82,7 @@ export function CedarCode({
   wrap?: boolean;
   language?: CodeLanguage;
 }) {
-  const { data: lines } = useSWR(
+  const { data: lines, error, isLoading } = useSWR(
     ["code-highlight", language, code],
     async ([, lang, source]) => {
       const { highlightCode } = await import("../_lib/highlight");
@@ -101,7 +101,10 @@ export function CedarCode({
         className,
       )}
     >
-      <code data-language={language}>
+      <code
+        data-language={language}
+        data-highlighter={lines ? "gpu-lexer" : error ? "plain-text" : isLoading ? "loading" : "plain-text"}
+      >
         {lines ? lines.map((line, lineIndex) => (
           <Fragment key={lineIndex}>
             {lineIndex > 0 ? "\n" : null}

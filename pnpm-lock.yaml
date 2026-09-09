@@ -50,6 +50,9 @@ importers:
       eve:
         specifier: ^0.51.0
         version: 0.51.0(ai@7.0.92(zod@4.5.4))(dotenv@17.4.2)(drizzle-orm@0.45.2(@types/pg@8.23.1)(pg@8.23.0))(jiti@2.7.0)
+      gpu-lexer:
+        specifier: ^0.0.2
+        version: 0.0.2
       jose:
         specifier: ^6.2.10
         version: 6.2.10
@@ -2805,6 +2808,9 @@ packages:
   gopd@1.2.0:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
     engines: {node: '>= 0.4'}
+
+  gpu-lexer@0.0.2:
+    resolution: {integrity: sha512-Aa39PHOQrz6GoIOxhgQpWe3N2ci8yU1M9F8+7JoKhgcWOxydaMzrZJH3JVPR8j23v1tIDIykPH7wFfqaKOuCiw==}
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
@@ -6919,6 +6925,8 @@ snapshots:
       is-glob: 4.0.3
 
   gopd@1.2.0: {}
+
+  gpu-lexer@0.0.2: {}
 
   graceful-fs@4.2.11: {}
 
