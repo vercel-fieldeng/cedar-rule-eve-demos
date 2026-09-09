@@ -59,20 +59,15 @@ function addToSummary(
   if (typeof input.amount === "number") entry.amountTotal += Math.trunc(input.amount);
 }
 
-export function pruneExpiredReservations(state: AuthorizationSessionDocument, now: string): AuthorizationSessionDocument {
-  return {
-    ...state,
-    reservations: state.reservations.filter((reservation) => reservation.expiresAt > now),
-  };
-}
-
 export function buildSessionContext(
   state: AuthorizationSessionDocument,
   now: string,
   turn = 0,
   currentInput: Record<string, unknown> = {},
 ): SessionCedarContext {
-  const active = state.reservations.filter((reservation) => reservation.expiresAt > now);
+  // A deadline cannot prove that an operation did not execute. Unresolved
+  // reservations retain capacity until their outcome is confirmed.
+  const active = state.reservations;
   const counts = Object.fromEntries(TOOL_NAMES.map((tool) => [tool, 0])) as Record<ToolName, number>;
   const prior: SessionCedarContext["prior"] = {};
 

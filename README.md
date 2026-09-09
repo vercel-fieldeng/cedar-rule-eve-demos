@@ -33,7 +33,7 @@ orderdesk/v1/
 - Policy administration uses ETags. A stale save receives HTTP `409` and must be retried from freshly loaded configuration; changes are never silently merged.
 - Session documents contain successful completions and short-lived reservations. Contending calls retry ETag conflicts with fresh Cedar evaluation, then fail closed when bounded retries are exhausted.
 - Decision objects are separate audit records. Clearing them does not clear authorization state.
-- Reservations expire after 30 seconds. This conservative window prevents uncertain post-execution state from immediately releasing capacity.
+- Reservations carry a 30-second diagnostic deadline, but never release capacity merely because time elapsed. Only a confirmed outcome releases a reservation. If a process dies with an unknown outcome, that session retains the reserved capacity; reconcile the operation before reusing it. This demo provides no automatic reconciliation for unknown outcomes.
 
 Deleting the Blob store or the `orderdesk/v1/` prefix resets policies, session authorization history, and audit logs. Reset Policies replaces only the policy document and preserves the current engine mode.
 
