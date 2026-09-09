@@ -32,7 +32,7 @@ orderdesk/v1/
 - `config/policies.json` contains a schema version, monotonic policy revision, mode, update metadata, and the full policy set. Missing config is initialized with create-only semantics from `policies/*.cedar`.
 - Policy administration uses ETags. A stale save receives HTTP `409` and must be retried from freshly loaded configuration; changes are never silently merged.
 - Session documents contain successful completions and short-lived reservations. Contending calls retry ETag conflicts with fresh Cedar evaluation, then fail closed when bounded retries are exhausted.
-- Decision objects are separate audit records. Clearing them does not clear authorization state. Pending records remain visible until execution finishes and can be cleared afterward.
+- Decision objects are separate audit records. Clearing them does not clear authorization state.
 - Reservations expire after 30 seconds. This conservative window prevents uncertain post-execution state from immediately releasing capacity.
 
 Deleting the Blob store or the `orderdesk/v1/` prefix resets policies, session authorization history, and audit logs. Reset Policies replaces only the policy document and preserves the current engine mode.
@@ -111,5 +111,7 @@ This project intentionally exposes:
 These are teaching surfaces, not production authentication or authorization. Before using this pattern with real data, replace persona JWTs with your IdP, authorize session ownership, protect policy and audit endpoints with administrator roles, remove public principal selection, and connect tools to idempotent production systems with their own validation and audit controls.
 
 ## Default policy behavior
+
+Clearing the audit log preserves pending records until execution finishes. They remain visible and can be cleared afterward, allowing the runner to record the final outcome safely.
 
 The checked-in policy set demonstrates Cedar default deny, permit/forbid precedence, input constraints, service principals, business-hour and region toggles, sequencing, same-order approval, one-hour approval expiry, consumed approval capacity, three-refund session count limits, and a 2000 session refund budget. All business mutations remain explicitly simulated and keep fixtures pristine for repeatable demos.
