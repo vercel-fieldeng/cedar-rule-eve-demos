@@ -1,6 +1,14 @@
 "use client";
 
-import { ChevronDownIcon, MessageSquarePlusIcon, ShieldCheckIcon, UserIcon, ServerIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ExternalLinkIcon,
+  MessageSquarePlusIcon,
+  ServerIcon,
+  ShieldCheckIcon,
+  TriangleIcon,
+  UserIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -96,6 +104,19 @@ export function ConsoleHeader({ onNewSession }: { onNewSession: () => void }) {
         <Button variant="ghost" size="sm" className="h-8 gap-1.5" onClick={onNewSession}>
           <MessageSquarePlusIcon className="size-4" />
           <span className="hidden sm:inline">New session</span>
+        </Button>
+
+        <Button asChild size="sm" className="h-8 gap-1.5 px-2.5 sm:px-3">
+          <a
+            href="https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel-fieldeng%2Fcedar-rule-eve-demos"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Deploy this project to Vercel"
+          >
+            <TriangleIcon className="size-3.5 fill-current" aria-hidden />
+            <span className="hidden md:inline">Deploy</span>
+            <ExternalLinkIcon className="hidden size-3 md:block" aria-hidden />
+          </a>
         </Button>
       </div>
     </header>
