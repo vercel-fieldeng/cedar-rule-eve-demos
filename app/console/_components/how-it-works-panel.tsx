@@ -290,8 +290,8 @@ export function HowItWorksPanel() {
             slot would be filled by your IdP&apos;s JWKS instead of a shared secret.
           </Prose>
           <div className="grid items-start gap-3 lg:grid-cols-2 *:min-w-0">
-            <CedarCode code={CODE_MINT} wrap />
-            <CedarCode code={CODE_CHANNEL} wrap />
+            <CedarCode code={CODE_MINT} language="typescript" wrap />
+            <CedarCode code={CODE_CHANNEL} language="typescript" wrap />
           </div>
         </Section>
 
@@ -305,8 +305,8 @@ export function HowItWorksPanel() {
             policy blocked the request instead of failing the turn.
           </Prose>
           <div className="grid items-start gap-3 lg:grid-cols-[2fr_3fr] *:min-w-0">
-            <CedarCode code={CODE_TOOL} wrap />
-            <CedarCode code={CODE_GUARD} wrap />
+            <CedarCode code={CODE_TOOL} language="typescript" wrap />
+            <CedarCode code={CODE_GUARD} language="typescript" wrap />
           </div>
         </Section>
 
@@ -319,8 +319,8 @@ export function HowItWorksPanel() {
             <FileRef>principal.getTag(&quot;role&quot;)</FileRef>.
           </Prose>
           <div className="grid items-start gap-3 lg:grid-cols-[2fr_3fr] *:min-w-0">
-            <CedarCode code={CODE_PRINCIPAL} wrap />
-            <CedarCode code={CODE_REQUEST} wrap />
+            <CedarCode code={CODE_PRINCIPAL} language="typescript" wrap />
+            <CedarCode code={CODE_REQUEST} language="typescript" wrap />
           </div>
         </Section>
 
@@ -334,8 +334,8 @@ export function HowItWorksPanel() {
             like <FileRef>context.input.ammount</FileRef> fails strict validation before it can be saved.
           </Prose>
           <div className="grid items-start gap-3 lg:grid-cols-2 *:min-w-0">
-            <CedarCode code={CODE_POLICY} wrap />
-            <CedarCode code={CODE_SCHEMA} wrap />
+            <CedarCode code={CODE_POLICY} language="typescript" wrap />
+            <CedarCode code={CODE_SCHEMA} language="typescript" wrap />
           </div>
         </Section>
 
@@ -349,8 +349,8 @@ export function HowItWorksPanel() {
             trail can never disagree.
           </Prose>
           <div className="grid items-start gap-3 lg:grid-cols-2 *:min-w-0">
-            <CedarCode code={CODE_SESSION_CTX} wrap />
-            <CedarCode code={CODE_TEMPORAL} wrap />
+            <CedarCode code={CODE_SESSION_CTX} language="typescript" wrap />
+            <CedarCode code={CODE_TEMPORAL} language="typescript" wrap />
           </div>
         </Section>
 
@@ -362,7 +362,7 @@ export function HowItWorksPanel() {
             <FileRef>_policy.wouldDeny</FileRef>. This is how you dry-run a new policy set against real
             traffic before flipping it on; the Decisions tab shows the would-be denials in amber.
           </Prose>
-          <CedarCode code={CODE_TABLES} wrap />
+          <CedarCode code={CODE_TABLES} language="typescript" wrap />
         </Section>
 
         <Section step="07" title="The console is a client of the same engine">
@@ -384,7 +384,7 @@ export function HowItWorksPanel() {
             driver are marked external so eve does not bundle them into its tool snapshots. Policies are
             seeded into Neon on first request; after that the database is the only source of truth.
           </Prose>
-          <CedarCode code={CODE_AGENT} wrap />
+          <CedarCode code={CODE_AGENT} language="typescript" wrap />
         </Section>
 
         <Section title="File map">
