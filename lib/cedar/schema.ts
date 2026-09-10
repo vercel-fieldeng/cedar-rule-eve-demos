@@ -75,7 +75,7 @@ function sessionRecordType(): string {
 export function generateCedarSchema(): string {
   const lines: string[] = [];
   lines.push(`namespace ${CEDAR_NAMESPACE} {`);
-  lines.push(`  // Human caller authenticated via JWT. Claims are exposed as tags.`);
+  lines.push(`  // Simulated human persona. Demo attributes are exposed as tags.`);
   lines.push(`  // AgentCore analogue: AgentCore::OAuthUser`);
   lines.push(`  entity User tags String;`);
   lines.push(``);

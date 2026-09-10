@@ -26,9 +26,9 @@ export function principalFromSessionAuth(auth: {
   readonly subject?: string;
   readonly attributes: Readonly<Record<string, string | readonly string[]>>;
 } | null): CedarPrincipal {
-  if (!auth) throw new Error("Cedar authorization requires an authenticated Eve session.");
+  if (!auth) throw new Error("Cedar authorization requires a selected demo persona.");
   const tags = claimsToStringTags(auth.attributes);
-  const isService = tags.principal_kind === "service" || auth.principalType === "vercel-oidc";
+  const isService = auth.principalType === "service";
   return {
     kind: isService ? "service" : "user",
     id: auth.subject ?? auth.principalId,

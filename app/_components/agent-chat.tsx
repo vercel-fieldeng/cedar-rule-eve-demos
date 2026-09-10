@@ -45,20 +45,20 @@ interface AgentChatProps {
   readonly resetKey?: string | number;
   /**
    * When set (and its `key` changes), the message is sent automatically once
-   * the persona token is available. Used by guided scenarios in the console.
+   * the simulated persona is available. Used by guided scenarios in the console.
    */
   readonly autoSend?: { key: number; text: string } | null;
   readonly onAutoSendConsumed?: (key: number) => void;
 }
 
 /**
- * The chat waits for the first credential before mounting. Eve receives a
- * stable bearer getter, so later token refreshes preserve the durable session.
+ * The chat waits for the selected persona before mounting. Eve receives a
+ * stable selector getter for the simulated persona on each request.
  */
 export function AgentChat(props: AgentChatProps) {
   const identity = usePersona();
 
-  if (!identity.token) {
+  if (!identity.ready) {
     return (
       <div
         className={cn(
@@ -68,14 +68,10 @@ export function AgentChat(props: AgentChatProps) {
         role="status"
         aria-live="polite"
       >
-        {identity.error ? (
-          <span className="text-destructive">Could not mint a persona token.</span>
-        ) : (
-          <span className="flex items-center gap-2">
-            <Loader2Icon className="size-4 animate-spin" aria-hidden />
-            Signing in as {identity.persona?.label ?? "…"}
-          </span>
-        )}
+        <span className="flex items-center gap-2">
+          <Loader2Icon className="size-4 animate-spin" aria-hidden />
+          Selecting demo persona {identity.persona?.label ?? "…"}
+        </span>
       </div>
     );
   }
@@ -131,7 +127,7 @@ function AgentChatInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
 
-  // Guided scenarios: send the prompt once the chat is mounted with a valid token.
+  // Guided scenarios: send once the chat is mounted with a selected demo persona.
   // Deferred with a cleared timeout so React StrictMode's simulated unmount (which
   // makes useEveAgent abort the active turn) cannot cancel the request in dev.
   const sentAutoKey = useRef<number | null>(null);
@@ -303,7 +299,7 @@ function AgentChatInner({
             <h1 className="font-medium text-5xl tracking-tighter">{AGENT_NAME}</h1>
             {identity.persona ? (
               <p className="text-muted-foreground text-sm">
-                Signed in as <span className="text-foreground">{identity.persona.label}</span>
+                Simulating <span className="text-foreground">{identity.persona.label}</span>
               </p>
             ) : null}
             <a

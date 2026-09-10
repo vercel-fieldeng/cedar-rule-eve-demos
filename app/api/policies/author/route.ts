@@ -45,7 +45,7 @@ must type-check exactly.
 ${getCedarSchema()}
 
 ## Conventions
-- Principals: Eve::User (human, JWT claims exposed as string tags) or Eve::ServicePrincipal (workload).
+- Principals: Eve::User (simulated human attributes exposed as string tags) or Eve::ServicePrincipal (simulated workload).
 - Actions: Eve::Action::"<tool_name>" — one per agent tool.
 - Resource: always Eve::Agent::"orderdesk".
 - Tool arguments are in context.input.<field>. Optional fields MUST be guarded:

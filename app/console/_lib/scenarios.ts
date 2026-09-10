@@ -19,7 +19,7 @@ export const SCENARIOS: Scenario[] = [
   {
     id: "rbac-allow",
     title: "Role-based permit",
-    agentcore: "Principal attribute conditions on AgentCore::OAuthUser (JWT claims as tags)",
+    agentcore: "Principal attribute conditions, using simulated persona attributes as Cedar tags",
     personaId: "dev-support-lead",
     prompt: "Look up order ORD-1001, then refund $120 on it for a defective item. Do not ask me to confirm.",
     expect:

@@ -1,5 +1,5 @@
 /**
- * Demo identities. Each persona becomes a JWT whose claims are projected to
+ * Explicitly simulated identities. Each persona has fixed attributes projected to
  * Cedar as `Eve::User` tags (string claims) or `Eve::ServicePrincipal`
  * attributes. They mirror the identity shapes AgentCore exposes to Cedar:
  *
@@ -13,7 +13,7 @@ export interface Persona {
   readonly kind: PersonaKind;
   readonly label: string;
   readonly summary: string;
-  /** JWT claims. `sub` is required; everything else becomes a Cedar tag. */
+  /** Demo attributes. `sub` identifies the persona; other fields become Cedar tags. */
   readonly claims: Readonly<Record<string, string | readonly string[]>>;
 }
 

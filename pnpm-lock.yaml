@@ -53,9 +53,6 @@ importers:
       gpu-lexer:
         specifier: ^0.0.2
         version: 0.0.2
-      jose:
-        specifier: ^6.2.10
-        version: 6.2.10
       lucide-react:
         specifier: ^1.16.0
         version: 1.17.0(react@19.2.4)

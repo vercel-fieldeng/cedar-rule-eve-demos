@@ -77,14 +77,14 @@ export function ConsoleHeader({
                 <UserIcon className="size-3.5 text-muted-foreground" />
               )}
               <span className="max-w-40 truncate text-xs sm:max-w-56 sm:text-sm">
-                {identity.persona?.label ?? "Loading identity"}
+                Simulating: {identity.persona?.label ?? "Loading persona"}
               </span>
               <ChevronDownIcon className="size-3.5 text-muted-foreground" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-80">
             <DropdownMenuLabel className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-              Users (OAuth-style JWT)
+              Simulated users (not authenticated)
             </DropdownMenuLabel>
             {users.map((p) => (
               <PersonaItem key={p.id} p={p} active={p.id === identity.personaId} onSelect={onSelectPersona} />
