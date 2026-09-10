@@ -79,8 +79,8 @@ function FileRef({ children }: { children: React.ReactNode }) {
 
 function Flow() {
   const steps = [
-    { label: "Browser", sub: "persona JWT" },
-    { label: "eve", sub: "verified session" },
+    { label: "Browser", sub: "simulated persona" },
+    { label: "eve", sub: "demo session" },
     { label: "guarded()", sub: "reserve + decide" },
     { label: "Tool", sub: "simulated once" },
     { label: "Blob", sub: "complete + audit" },
@@ -118,7 +118,7 @@ const FILES = [
   { path: "lib/cedar/schema.ts", role: "Cedar schema generated from the tool catalog" },
   { path: "policies/*.cedar", role: "canonical, readable default policies" },
   { path: "lib/cedar/generated-defaults.ts", role: "build-safe generated copy used by Next.js and eve" },
-  { path: "lib/personas/*", role: "trusted demo identities and JWT projection" },
+  { path: "lib/personas/*", role: "simulated identities and Cedar principal mapping" },
   { path: "app/api/policies/*", role: "ETag-safe CRUD, validation, dry-run, and AI authoring" },
   { path: "app/api/decisions", role: "session/all audit feed and scoped clearing" },
 ];
@@ -140,11 +140,11 @@ export function HowItWorksPanel() {
           <Flow />
         </header>
 
-        <Section step="01" title="Identity is verified once and projected consistently">
+        <Section step="01" title="Identity is explicitly simulated">
           <Prose>
-            The persona picker mints a one-hour demo JWT. The eve channel verifies it, then the same
-            claims-to-tags helper projects both live sessions and dry-run personas into Cedar principals.
-            Token refresh uses a stable credential getter, so it does not reset the chat or resend a scenario.
+            The persona picker sends a public demo selector. The eve channel maps it to a fixed
+            persona, and the same claims-to-tags helper supplies live and dry-run Cedar principals.
+            Anyone with access can select any persona. Deployment Protection controls access to the playground.
           </Prose>
         </Section>
 
@@ -206,7 +206,7 @@ export function HowItWorksPanel() {
 
         <Section step="08" title="Trust boundary for this public demo">
           <Prose>
-            Persona selection, token minting, and policy administration are intentionally trusted demo features.
+            Simulated persona selection and policy administration are intentionally trusted demo features.
             They are not production authentication. A real deployment must replace personas with an identity
             provider and protect policy APIs. Vercel Deployment Protection is configured on the destination
             project and does not transfer through the Deploy button.

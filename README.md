@@ -2,13 +2,13 @@
 
 OrderDesk is a public Next.js 16 demo of an [eve](https://github.com/vercel/eve) customer-operations agent whose tool calls are authorized by Cedar before execution. It includes selectable demo principals, policy editing and validation, AI-assisted policy authoring, dry-run tests, guided scenarios, and a live decision audit feed.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel-fieldeng%2Fcedar-rule-eve-demos&project-name=orderdesk-cedar-eve&repository-name=orderdesk-cedar-eve&stores=%5B%7B%22type%22%3A%22blob%22%2C%22access%22%3A%22private%22%7D%5D&env=PERSONA_JWT_SECRET&envDescription=Generate%20a%20unique%20secret%20with%20at%20least%2032%20characters.)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel-fieldeng%2Fcedar-rule-eve-demos&project-name=orderdesk-cedar-eve&repository-name=orderdesk-cedar-eve&stores=%5B%7B%22type%22%3A%22blob%22%2C%22access%22%3A%22private%22%7D%5D)
 
 ## Architecture
 
 Every authored eve tool uses `guarded()` rather than `defineTool()` directly:
 
-1. The browser sends a short-lived demo persona JWT to the eve channel.
+1. The browser sends an unsigned `demo:<persona-id>` selector through Eve's bearer transport. The channel maps it to a fixed server-side persona. This explicitly simulates identity; it does not authenticate a person.
 2. The guard loads the active policy document and authorization-session document from private Vercel Blob.
 3. Cedar evaluates principal, action, agent resource, tool input, time, and session context.
 4. An allowed call reserves count, budget, and approval capacity with an ETag-conditional session write.
@@ -49,10 +49,9 @@ Configure these variables in `.env.development.local`:
 
 ```bash
 BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
-PERSONA_JWT_SECRET=<unique random value of at least 32 characters>
 ```
 
-Use `openssl rand -base64 48` or an equivalent cryptographically secure generator for `PERSONA_JWT_SECRET`. Never reuse the example or share this value.
+No persona signing secret, JWT minting, or token refresh is required.
 
 AI Gateway authentication is automatic on Vercel. For local AI policy authoring, authenticate through the Vercel development environment or configure local AI Gateway credentials according to the current Vercel AI Gateway documentation. The Cedar engine, policy CRUD, test panel, scenarios, and decision feed do not require an AI model call; only the Author tab and agent conversation do.
 
@@ -99,18 +98,18 @@ pnpm build
 
 ## Deployment and trust model
 
-The Deploy button can clone the repository, request `PERSONA_JWT_SECRET`, and provision a private Blob store. It cannot configure project-level Deployment Protection, replace demo authentication, or decide who may administer policies.
+The Deploy button can clone the repository and provision a private Blob store. It cannot configure project-level Deployment Protection or decide who may administer policies.
 
 After deployment, open the destination Vercel project and enable **Deployment Protection** for the environments you need. Choose Vercel Authentication or password protection if available on your plan. Protection settings do not transfer when a repository is cloned. Without protection, the production domain and its trusted demo controls are public.
 
 This project intentionally exposes:
 
 - selectable personas;
-- persona-token minting;
+- unsigned demo persona selection;
 - policy administration APIs;
 - simulated order operations.
 
-These are teaching surfaces, not production authentication or authorization. Before using this pattern with real data, replace persona JWTs with your IdP, authorize session ownership, protect policy and audit endpoints with administrator roles, remove public principal selection, and connect tools to idempotent production systems with their own validation and audit controls.
+Anyone who can access the deployment can select any persona, including admin. Missing and unknown selectors are rejected, but known selectors are public and confer no proof of identity. Deployment Protection is the access boundary. Before using real data, replace `simulatedPersona` with verified IdP authentication, authorize session ownership, protect policy and audit endpoints with administrator roles, and connect tools to idempotent production systems. Existing JWT-backed sessions should be replaced with a new demo session after upgrading.
 
 ## Default policy behavior
 
